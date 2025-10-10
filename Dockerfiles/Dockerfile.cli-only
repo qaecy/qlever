@@ -1,0 +1,57 @@
+FROM ubuntu:24.04 AS base
+LABEL maintainer="QLever CLI"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV LC_CTYPE=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+FROM base AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y wget
+RUN wget https://apt.kitware.com/kitware-archive.sh && chmod +x kitware-archive.sh && ./kitware-archive.sh
+RUN apt-get update && apt-get install -y build-essential cmake libicu-dev tzdata pkg-config uuid-runtime uuid-dev git libjemalloc-dev ninja-build libzstd-dev libssl-dev libboost1.83-dev libboost-program-options1.83-dev libboost-iostreams1.83-dev libboost-url1.83-dev libboost-container1.83-dev
+
+# Copy source files
+COPY src /qlever/src/
+COPY test /qlever/test/
+COPY benchmark /qlever/benchmark/
+COPY CMakeLists.txt /qlever/
+COPY CompilationInfo.cmake /qlever/
+
+# Build essential QLever binaries
+WORKDIR /qlever/build/
+RUN cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -GNinja ..
+RUN cmake --build . --target QleverCliMain --target IndexBuilderMain --target ServerMain
+
+# Runtime stage - very minimal
+FROM ubuntu:24.04 AS runtime
+WORKDIR /qlever
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install minimal runtime deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libicu74 \
+    libssl3 \
+    libzstd1 \
+    libjemalloc2 \
+    libgomp1 \
+    libboost-program-options1.83.0 \
+    libboost-iostreams1.83.0 \
+    libboost-system1.83.0 \
+    libboost-url1.83.0 \
+    libboost-container1.83.0 \
+    libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the required binaries
+COPY --from=builder /qlever/build/QleverCliMain /qlever/QleverCliMain
+COPY --from=builder /qlever/build/IndexBuilderMain /qlever/IndexBuilderMain
+COPY --from=builder /qlever/build/ServerMain /qlever/ServerMain
+RUN chmod +x /qlever/QleverCliMain /qlever/IndexBuilderMain /qlever/ServerMain
+
+# Install nodeJS (NB! Only needed for JavaScript implementation)
+RUN apt-get update && apt-get install -y nodejs
+
+# Direct entrypoint to our CLI
+ENTRYPOINT ["/qlever/QleverCliMain"]
