@@ -481,3 +481,6 @@ qlever_target_link_libraries(VocabularyMergerMain index parser ${CMAKE_THREAD_LI
 
 add_executable(PrintIndexVersionMain src/PrintIndexVersionMain.cpp)
 qlever_target_link_libraries(PrintIndexVersionMain util)
+
+add_executable(QleverCliMain src/QleverCliMain.cpp)
+qlever_target_link_libraries(QleverCliMain parser engine util index qlever absl::strings)
