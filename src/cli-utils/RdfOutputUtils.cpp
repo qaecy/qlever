@@ -3,7 +3,12 @@
 #include <iostream>
 #include <algorithm>
 #include <sstream>
+#include <memory>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include "util/Log.h"
+#include "util/http/MediaTypes.h"
+#include "libqlever/Qlever.h"
 
 namespace cli_utils {
 
@@ -197,5 +202,177 @@ bool isGzipFile(const std::string& filename) {
 }
 
 } // namespace RdfFormatUtils
+
+// =============================================================================
+// DatabaseSerializer Implementation
+// =============================================================================
+
+DatabaseSerializer::DatabaseSerializer(std::shared_ptr<qlever::Qlever> qlever) 
+    : qlever_(std::move(qlever)) {}
+
+std::string DatabaseSerializer::extractValue(const nlohmann::json& binding) const {
+    const auto& type = binding["type"];
+    const auto& value = binding["value"];
+    
+    if (type == "uri") {
+        return "<" + value.get<std::string>() + ">";
+    } else if (type == "literal") {
+        std::string result = "\"" + value.get<std::string>() + "\"";
+        if (binding.contains("datatype")) {
+            result += "^^<" + binding["datatype"].get<std::string>() + ">";
+        } else if (binding.contains("xml:lang")) {
+            result += "@" + binding["xml:lang"].get<std::string>();
+        }
+        return result;
+    } else if (type == "bnode") {
+        return "_:" + value.get<std::string>();
+    }
+    return value.get<std::string>();
+}
+
+void DatabaseSerializer::serialize(const std::string& format, const std::string& outputFile) {
+    // Validate format
+    if (!RdfFormatUtils::isValidFormat(format)) {
+        throw std::runtime_error("Invalid format: " + format + ". Supported formats: nt, nq");
+    }
+    
+    // Setup output streams
+    bool useGzip = !outputFile.empty() && RdfFormatUtils::isGzipFile(outputFile);
+    std::unique_ptr<std::ofstream> fileStream;
+    std::unique_ptr<GzipOutputStream> gzipStream;
+    std::ostream* outputStream = &std::cout;
+    
+    if (!outputFile.empty()) {
+        if (useGzip) {
+            gzipStream = std::make_unique<GzipOutputStream>(outputFile);
+        } else {
+            fileStream = std::make_unique<std::ofstream>(outputFile);
+            if (!fileStream->is_open()) {
+                throw std::runtime_error("Cannot write to output file: " + outputFile);
+            }
+            outputStream = fileStream.get();
+        }
+    }
+    
+    // Lambda to write output
+    auto writeOutput = [&](const std::string& data) {
+        if (useGzip && gzipStream) {
+            gzipStream->write(data);
+        } else {
+            *outputStream << data;
+        }
+    };
+    
+    // Lambda to flush output
+    auto flushOutput = [&]() {
+        if (useGzip && gzipStream) {
+            gzipStream->flush();
+        } else {
+            outputStream->flush();
+        }
+    };
+    
+    // Start serialization with progress logging
+    std::cerr << "Starting serialization to " << format << " format";
+    if (!outputFile.empty()) {
+        std::cerr << ", output: " << outputFile;
+        if (useGzip) std::cerr << " (gzipped)";
+    }
+    std::cerr << std::endl;
+    
+    size_t offset = 0;
+    size_t totalTriples = 0;
+    auto startTime = std::chrono::steady_clock::now();
+    auto lastProgressTime = startTime;
+    
+    // Pre-allocate string buffer for better performance
+    std::string batchBuffer;
+    batchBuffer.reserve(BATCH_SIZE * 200); // Estimate ~200 chars per triple
+    
+    // Setup logging suppression for QLever's verbose query messages
+    std::ofstream nullStream("/dev/null");
+    std::streambuf* originalCerrBuf = std::cerr.rdbuf();
+    
+    while (true) {
+        // Construct batch query with large LIMIT and OFFSET
+        std::string sparqlQuery;
+        if (format == "nq") {
+            sparqlQuery = "SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT " + 
+                         std::to_string(BATCH_SIZE) + " OFFSET " + std::to_string(offset);
+        } else {
+            sparqlQuery = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT " + 
+                         std::to_string(BATCH_SIZE) + " OFFSET " + std::to_string(offset);
+        }
+        
+        // Temporarily redirect QLever's logging to suppress verbose messages
+        std::cerr.rdbuf(nullStream.rdbuf());
+        
+        // Execute batch query
+        std::string result = qlever_->query(sparqlQuery, ad_utility::MediaType::sparqlJson);
+        
+        // Restore original logging
+        std::cerr.rdbuf(originalCerrBuf);
+        
+        // Parse the JSON result
+        nlohmann::json queryResult = nlohmann::json::parse(result);
+        
+        if (!queryResult.contains("results") || !queryResult["results"].contains("bindings")) {
+            break; // No more results
+        }
+        
+        auto bindings = queryResult["results"]["bindings"];
+        if (bindings.empty()) {
+            break; // No more results
+        }
+        
+        // Process and write this batch efficiently
+        batchBuffer.clear();
+        
+        for (const auto& binding : bindings) {
+            std::string subject = extractValue(binding["s"]);
+            std::string predicate = extractValue(binding["p"]);
+            std::string object = extractValue(binding["o"]);
+            
+            if (format == "nt") {
+                batchBuffer.append(subject).append(" ").append(predicate).append(" ").append(object).append(" .\n");
+            } else if (format == "nq") {
+                std::string graph = binding.contains("g") ? extractValue(binding["g"]) : "<>";
+                batchBuffer.append(subject).append(" ").append(predicate).append(" ").append(object).append(" ").append(graph).append(" .\n");
+            }
+            totalTriples++;
+        }
+        
+        // Write batch to output
+        writeOutput(batchBuffer);
+        flushOutput();
+        
+        // Progress logging every 5 seconds with detailed metrics
+        auto currentTime = std::chrono::steady_clock::now();
+        if (currentTime - lastProgressTime >= PROGRESS_INTERVAL) {
+            auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                currentTime - startTime).count();
+            double triplesPerSecond = elapsedSeconds > 0 ? totalTriples / static_cast<double>(elapsedSeconds) : 0;
+            
+            std::cerr << "Processed " << totalTriples << " triples (" 
+                      << static_cast<int>(triplesPerSecond) << "/sec) " 
+                      << "(" << (elapsedSeconds / 60) << "min elapsed)" << std::endl;
+            lastProgressTime = currentTime;
+        }
+        
+        // If we got fewer results than batch size, we're done
+        if (bindings.size() < BATCH_SIZE) {
+            break;
+        }
+        
+        offset += BATCH_SIZE;
+    }
+    
+    // Final statistics
+    auto endTime = std::chrono::steady_clock::now();
+    auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+    
+    std::cerr << "Serialization complete. Total triples: " << totalTriples 
+              << ", Time: " << totalDuration.count() << "ms" << std::endl;
+}
 
 } // namespace cli_utils

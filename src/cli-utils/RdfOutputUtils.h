@@ -4,7 +4,13 @@
 #include <string>
 #include <fstream>
 #include <chrono>
+#include <nlohmann/json.hpp>
 #include "util/Timer.h"
+
+// Forward declarations
+namespace qlever {
+    class Qlever;
+}
 
 namespace cli_utils {
 
@@ -79,6 +85,23 @@ public:
     // Disable copy operations
     RdfOutputWriter(const RdfOutputWriter&) = delete;
     RdfOutputWriter& operator=(const RdfOutputWriter&) = delete;
+};
+
+/**
+ * @brief Database serializer for large-scale RDF output with chunked processing
+ */
+class DatabaseSerializer {
+private:
+    std::shared_ptr<qlever::Qlever> qlever_;
+    static constexpr size_t BATCH_SIZE = 500000; // 500K triples per batch
+    static constexpr auto PROGRESS_INTERVAL = std::chrono::seconds(5);
+    
+    std::string extractValue(const nlohmann::json& binding) const;
+    
+public:
+    explicit DatabaseSerializer(std::shared_ptr<qlever::Qlever> qlever);
+    
+    void serialize(const std::string& format, const std::string& outputFile = "");
 };
 
 /**

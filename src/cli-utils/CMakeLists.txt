@@ -2,6 +2,8 @@
 add_library(cliUtils
     RdfOutputUtils.cpp
     QueryUtils.cpp
+    IndexStatsUtils.cpp
+    IndexBuilderUtils.cpp
 )
 
 target_link_libraries(cliUtils
