@@ -72,8 +72,48 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 - Add CLI command for dumping the entire store
 
 
-### Deploy image
+### Use in your app
+```dockerfile
+# In your application's Dockerfile
+FROM your-app-base:latest
 
+# Copy just the binary from the QLever image
+COPY --from=qlever-cli:alpine /qlever/QleverCliMain /usr/local/bin/qlever-cli
+
+# Install only the runtime dependencies QLever needs
+RUN apk add --no-cache \
+    libstdc++ \
+    libgcc \
+    icu-libs \
+    openssl \
+    zstd-libs \
+    zlib \
+    jemalloc \
+    boost-program_options \
+    boost-iostreams \
+    boost-system
+
+# Your app code
+COPY . /app
+WORKDIR /app
+
+# Now you can use qlever-cli directly
+RUN qlever-cli --help
+```
+
+Example use in app:
+```python
+import subprocess
+
+# Execute QLever commands directly
+result = subprocess.run([
+    'qlever-cli', 'query', 
+    './databases/mydb', 
+    'SELECT * WHERE { ?s ?p ?o } LIMIT 10'
+], capture_output=True, text=True)
+
+data = json.loads(result.stdout)
+```
 
 ### Thoughts on saturation
 1. Build index for unsaturated database + schema
