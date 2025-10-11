@@ -49,13 +49,17 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 
 ### Serialize
 The serialize command allows dumping the whole database in either nt or nq format.
-In a test, a 25M triples file was serialized as .nt in 3:22.39 using a query approach
+In a test, a 25M triples file was serialized as gzipped .nt in 3:38.74 (3:01.85 without gzipping).
+
 ```bash
 # As NTriples
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nt"
 
 # As NTriples -> stream to file
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nt /workspace/test.nt"
+
+# As NTriples -> stream to file and gzip
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nt /workspace/test.nt.gz"
 
 # As NQuads
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nq"

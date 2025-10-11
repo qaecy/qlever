@@ -10,9 +10,12 @@
 #include "util/http/MediaTypes.h"
 #include "util/Timer.h"
 #include "index/InputFileSpecification.h"
+#include "index/vocabulary/VocabularyType.h"
 #include "util/Log.h"
 #include "cli-utils/QueryUtils.h"
 #include "cli-utils/RdfOutputUtils.h"
+#include "cli-utils/IndexStatsUtils.h"
+#include "cli-utils/IndexBuilderUtils.h"
 
 using json = nlohmann::json;
 
@@ -109,8 +112,15 @@ void printUsage(const char* programName) {
     std::cerr << "  \"memory_limit_gb\": 4,        // optional\n";
     std::cerr << "  \"settings_file\": \"settings.json\",  // optional\n";
     std::cerr << "  \"keep_temp_files\": false,    // optional\n";
+    std::cerr << "  \"vocabulary_type\": \"on-disk-compressed-geo-split\",  // optional, for GeoSPARQL support\n";
     std::cerr << "  \"add_words_from_literals\": true  // optional, for text index\n";
     std::cerr << "}\n";
+    std::cerr << "\nVocabulary types:\n";
+    std::cerr << "  in-memory-uncompressed     - Fast but uses more memory\n";
+    std::cerr << "  on-disk-uncompressed       - Slower but uses less memory\n";
+    std::cerr << "  in-memory-compressed       - Good balance (compressed, in memory)\n";
+    std::cerr << "  on-disk-compressed         - Default (compressed, on disk)\n";
+    std::cerr << "  on-disk-compressed-geo-split - Required for GeoSPARQL support\n";
 }
 
 int executeQuery(const std::string& indexBasename, const std::string& queryStr, 
@@ -179,126 +189,17 @@ int serializeDatabase(const std::string& indexBasename, const std::string& forma
 int buildIndex(const std::string& jsonInput) {
     try {
         json input = json::parse(jsonInput);
+        json response = cli_utils::IndexBuilder::buildIndex(input);
         
-        // Validate required parameters
-        if (!input.contains("input_files") || !input["input_files"].is_array() || 
-            input["input_files"].empty()) {
-            json response = createErrorResponse("Missing or invalid 'input_files' parameter (must be non-empty array)");
-            std::cout << response.dump() << std::endl;
-            return 1;
-        }
-        if (!input.contains("index_name") || !input["index_name"].is_string()) {
-            json response = createErrorResponse("Missing or invalid 'index_name' parameter");
-            std::cout << response.dump() << std::endl;
-            return 1;
-        }
-
-        std::string indexName = input["index_name"];
-        std::string indexDirectory = input.value("index_directory", ".");
-        
-        // Ensure directory exists
-        if (!std::filesystem::exists(indexDirectory)) {
-            try {
-                std::filesystem::create_directories(indexDirectory);
-            } catch (const std::filesystem::filesystem_error& e) {
-                json response = createErrorResponse("Failed to create index directory: " + std::string(e.what()));
-                std::cout << response.dump() << std::endl;
-                return 1;
-            }
-        }
-        
-        // Create full path for index files
-        std::filesystem::path indexPath = std::filesystem::path(indexDirectory) / indexName;
-        std::string fullIndexPath = indexPath.string();
-        
-        // Create IndexBuilderConfig
-        qlever::IndexBuilderConfig config;
-        config.baseName_ = fullIndexPath;
-        config.kbIndexName_ = indexName;
-
-        // Process input files
-        for (const auto& inputFile : input["input_files"]) {
-            std::string filepath;
-            qlever::Filetype filetype = qlever::Filetype::Turtle; // default
-
-            if (inputFile.is_string()) {
-                filepath = inputFile.get<std::string>();
-            } else if (inputFile.is_object()) {
-                if (!inputFile.contains("path") || !inputFile["path"].is_string()) {
-                    json response = createErrorResponse("Input file object must contain 'path' string");
-                    std::cout << response.dump() << std::endl;
-                    return 1;
-                }
-                filepath = inputFile["path"];
-
-                // Optional format specification
-                if (inputFile.contains("format") && inputFile["format"].is_string()) {
-                    std::string format = inputFile["format"];
-                    if (format == "ttl" || format == "turtle") {
-                        filetype = qlever::Filetype::Turtle;
-                    } else if (format == "nt") {
-                        filetype = qlever::Filetype::Turtle; // NT is parsed as Turtle
-                    } else if (format == "nq") {
-                        filetype = qlever::Filetype::NQuad;
-                    } else {
-                        json response = createErrorResponse("Unsupported format: " + format + ". Use 'nt' or 'nq'");
-                        std::cout << response.dump() << std::endl;
-                        return 1;
-                    }
-                }
-            }
-
-            // Check if file exists
-            if (!std::filesystem::exists(filepath)) {
-                json response = createErrorResponse("Input file does not exist: " + filepath);
-                std::cout << response.dump() << std::endl;
-                return 1;
-            }
-
-            config.inputFiles_.emplace_back(filepath, filetype);
-        }
-
-        // Optional parameters
-        if (input.contains("memory_limit_gb") && input["memory_limit_gb"].is_number()) {
-            double memoryLimitGb = input["memory_limit_gb"];
-            config.memoryLimit_ = ad_utility::MemorySize::gigabytes(static_cast<size_t>(memoryLimitGb));
-        }
-
-        if (input.contains("settings_file") && input["settings_file"].is_string()) {
-            config.settingsFile_ = input["settings_file"];
-        }
-
-        if (input.contains("keep_temp_files") && input["keep_temp_files"].is_boolean()) {
-            config.keepTemporaryFiles_ = input["keep_temp_files"];
-        }
-
-        // Validate and build index
-        config.validate();
-        
-        auto startTime = std::chrono::steady_clock::now();
-        qlever::Qlever::buildIndex(config);
-        auto endTime = std::chrono::steady_clock::now();
-        
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-
-        json response;
-        response["success"] = true;
-        response["indexName"] = indexName;
-        response["indexDirectory"] = indexDirectory;
-        response["fullIndexPath"] = fullIndexPath;
-        response["numInputFiles"] = config.inputFiles_.size();
-        response["buildTimeMs"] = duration.count();
-        response["message"] = "Index built successfully";
-
         std::cout << response.dump() << std::endl;
-        return 0;
-
+        return response["success"].get<bool>() ? 0 : 1;
+        
     } catch (const json::parse_error& e) {
         json response = createErrorResponse("Invalid JSON input: " + std::string(e.what()));
         std::cout << response.dump() << std::endl;
         return 1;
     } catch (const std::exception& e) {
-        json response = createErrorResponse("Index building failed: " + std::string(e.what()));
+        json response = createErrorResponse("Unexpected error: " + std::string(e.what()));
         std::cout << response.dump() << std::endl;
         return 1;
     }
@@ -311,30 +212,17 @@ int getIndexStats(const std::string& indexBasename) {
         config.baseName_ = indexBasename;
         config.memoryLimit_ = ad_utility::MemorySize::gigabytes(1); // Minimal for stats
         
-        qlever::Qlever qlever{config};
+        auto qlever = std::make_shared<qlever::Qlever>(config);
+        cli_utils::IndexStatsCollector statsCollector(qlever);
         
-        // Get basic stats by querying
-        std::string statsQuery = "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }";
-        ad_utility::Timer timer{ad_utility::Timer::Started};
-        std::string result = qlever.query(statsQuery);
-        auto executionTime = timer.msecs().count();
-        
-        // Create stats response
-        json response;
-        response["success"] = true;
-        response["indexBasename"] = indexBasename;
-        response["tripleCountQuery"] = result;
-        response["executionTimeMs"] = executionTime;
-        response["timestamp"] = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        
-        std::cout << response.dump() << std::endl;
+        json response = statsCollector.collectStats(indexBasename);
+        std::cout << response.dump(2) << std::endl;
         return 0;
         
     } catch (const std::exception& e) {
         json response = createErrorResponse(e.what());
         response["indexBasename"] = indexBasename;
-        std::cout << response.dump() << std::endl;
+        std::cout << response.dump(2) << std::endl;
         return 1;
     }
 }
