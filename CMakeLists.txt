@@ -453,6 +453,7 @@ add_subdirectory(src/util)
 add_subdirectory(src/rdfTypes)
 add_subdirectory(src/global)
 add_subdirectory(src/libqlever)
+add_subdirectory(src/cli-utils)
 add_subdirectory(benchmark)
 
 enable_testing()
@@ -483,4 +484,4 @@ add_executable(PrintIndexVersionMain src/PrintIndexVersionMain.cpp)
 qlever_target_link_libraries(PrintIndexVersionMain util)
 
 add_executable(QleverCliMain src/QleverCliMain.cpp)
-qlever_target_link_libraries(QleverCliMain parser engine util index qlever absl::strings)
+qlever_target_link_libraries(QleverCliMain parser engine util index qlever cliUtils absl::strings)
