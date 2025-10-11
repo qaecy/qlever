@@ -50,8 +50,5 @@ COPY --from=builder /qlever/build/IndexBuilderMain /qlever/IndexBuilderMain
 COPY --from=builder /qlever/build/ServerMain /qlever/ServerMain
 RUN chmod +x /qlever/QleverCliMain /qlever/IndexBuilderMain /qlever/ServerMain
 
-# Install nodeJS (NB! Only needed for JavaScript implementation)
-RUN apt-get update && apt-get install -y nodejs
-
 # Direct entrypoint to our CLI
 ENTRYPOINT ["/qlever/QleverCliMain"]

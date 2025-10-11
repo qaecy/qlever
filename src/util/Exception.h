@@ -17,6 +17,11 @@
 #include "util/SourceLocation.h"
 #include "util/TypeTraits.h"
 
+// Stringification macro for condition expressions
+#ifndef __STRING
+#define __STRING(x) #x
+#endif
+
 // -------------------------------------------
 // Exception class code
 // -------------------------------------------
