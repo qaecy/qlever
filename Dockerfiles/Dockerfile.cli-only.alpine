@@ -1,0 +1,65 @@
+FROM alpine:3.19 AS base
+LABEL maintainer="QLever CLI"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV LC_CTYPE=C.UTF-8
+
+FROM base AS builder
+# Install build dependencies
+RUN apk add --no-cache \
+    build-base \
+    cmake \
+    ninja \
+    git \
+    wget \
+    curl \
+    bash \
+    pkgconfig \
+    icu-dev \
+    openssl-dev \
+    zstd-dev \
+    zlib-dev \
+    jemalloc-dev \
+    boost-dev \
+    linux-headers \
+    util-linux-dev
+
+# Copy source files
+COPY src /qlever/src/
+COPY test /qlever/test/
+COPY benchmark /qlever/benchmark/
+COPY CMakeLists.txt /qlever/
+COPY CompilationInfo.cmake /qlever/
+
+# Build essential QLever binaries
+WORKDIR /qlever/build/
+RUN cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DCMAKE_CXX_FLAGS="-Wno-psabi" -GNinja ..
+RUN cmake --build . --target QleverCliMain --target IndexBuilderMain --target ServerMain
+
+# Runtime stage - very minimal Alpine
+FROM alpine:3.19 AS runtime
+WORKDIR /qlever
+
+# Install minimal runtime dependencies
+RUN apk add --no-cache \
+    libstdc++ \
+    libgcc \
+    icu-libs \
+    openssl \
+    zstd-libs \
+    zlib \
+    jemalloc \
+    boost-program_options \
+    boost-iostreams \
+    boost-system
+
+# Copy the required binaries
+COPY --from=builder /qlever/build/QleverCliMain /qlever/QleverCliMain
+COPY --from=builder /qlever/build/IndexBuilderMain /qlever/IndexBuilderMain
+COPY --from=builder /qlever/build/ServerMain /qlever/ServerMain
+
+RUN chmod +x /qlever/QleverCliMain /qlever/IndexBuilderMain /qlever/ServerMain
+
+# Direct entrypoint to our CLI
+ENTRYPOINT ["/qlever/QleverCliMain"]

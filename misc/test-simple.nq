@@ -1,0 +1,7 @@
+# Simple N-Quads test file
+<http://example.org/subject1> <http://example.org/predicate1> <http://example.org/object1> <http://example.org/graph1> .
+<http://example.org/subject1> <http://example.org/predicate2> "hello" <http://example.org/graph2> .
+<http://example.org/subject1> <http://example.org/predicate3> "22.3"^^<http://www.w3.org/2001/XMLSchema#float> <http://example.org/graph3> .
+<http://example.org/subject1> <http://example.org/predicate5> <http://example.org/object5> .
+<http://example.org/subject2> <http://example.org/predicate1> <http://example.org/object2> <http://example.org/graph1> .
+<http://example.org/subject2> <http://example.org/predicate2> "world" <http://example.org/graph2> .
