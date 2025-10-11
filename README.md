@@ -13,9 +13,16 @@ The CLI tool binary is built inside a Docker container for compatibility reasons
 The qlever CLI is what is added in this repo and it makes querying and serializing the index possible through a CLI + offers a more convenient way build the index. To see the available commands, run `docker run --rm qlever-cli:alpine --help`
 
 ### Build index
-The index configuration is described in a JSON file that looks like the one you find in `misc/configs/build-test-index.json`. This config loads the very small nquads file `misc/test-simple.nq` (`test.nq contains RDF* and will currently fail`). 
+The index configuration is described in a JSON file that looks like the one you find in `misc/configs/build-test-index.json`. This config loads the very small nquads file `misc/test-simple.nq` (`test.nq contains RDF* and will currently fail`).
 
-Building an index from `misc/test-simple.nq` is then handled by the following CLI command:
+An important setting is the vocabulary type. Here are the 5 available types:
+- in-memory-uncompressed
+- on-disk-uncompressed
+- in-memory-compressed
+- on-disk-compressed (default)
+- on-disk-compressed-geo-split (needed for GeoSPARQL!)
+
+Building an index from the file `misc/test-simple.nq` is handled by the following CLI command:
 
 ```bash
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain build-index \"\$(cat misc/configs/build-test-index.json)\""
