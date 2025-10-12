@@ -90,6 +90,7 @@ FROM your-app-base:latest
 
 # Copy just the binary from the QLever image
 COPY --from=qlever-cli:alpine /qlever/QleverCliMain /usr/local/bin/qlever-cli
+# COPY --from=europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:latest /qlever/QleverCliMain /usr/local/bin/qlever-cli
 
 # Install only the runtime dependencies QLever needs
 RUN apk add --no-cache \

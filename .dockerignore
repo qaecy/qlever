@@ -3,6 +3,7 @@
 !test
 !e2e
 !benchmark
+!examples
 !.git
 !CMakeLists.txt
 !CompilationInfo.cmake

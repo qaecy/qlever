@@ -1,0 +1,79 @@
+# Real QLever WASM Build with In-Memory Index Support
+FROM --platform=linux/amd64 emscripten/emsdk:3.1.50
+
+WORKDIR /src
+
+# Install dependencies needed for QLever compilation
+RUN apt-get update && apt-get install -y \
+    cmake \
+    make \
+    ninja-build \
+    pkg-config \
+    python3-dev \
+    uuid-dev \
+    wget \
+    libicu-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade CMake to version 3.28.1 (required by QLever)
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.1/cmake-3.28.1-linux-x86_64.tar.gz && \
+    tar -zxf cmake-3.28.1-linux-x86_64.tar.gz && \
+    rm -rf /usr/local/man && \
+    cp -r cmake-3.28.1-linux-x86_64/* /usr/local/ && \
+    rm -rf cmake-3.28.1*
+
+# Copy QLever source code
+COPY . /qlever
+
+# Create build directory
+WORKDIR /qlever
+RUN mkdir -p build-wasm
+
+# Configure CMake for WASM build with minimal dependencies
+WORKDIR /qlever/build-wasm
+RUN emcmake cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-O3 -DNDEBUG" \
+    -DCMAKE_INSTALL_PREFIX=/output \
+    -DBUILD_TESTING=OFF \
+    -DUSE_PARALLEL=OFF \
+    -DUSE_BOOST_REGEX=ON \
+    -GNinja
+
+# Build only the necessary QLever libraries
+RUN emmake ninja -j$(nproc) \
+    index \
+    engine \
+    parser \
+    util
+
+# Build the WASM module
+WORKDIR /qlever
+RUN emcc -O3 -s WASM=1 \
+    -s EXPORTED_FUNCTIONS="['_malloc','_free']" \
+    -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap']" \
+    -s MODULARIZE=1 \
+    -s EXPORT_NAME="'QleverWasmModule'" \
+    -s ALLOW_MEMORY_GROWTH=1 \
+    -s INITIAL_MEMORY=64MB \
+    -s MAXIMUM_MEMORY=2GB \
+    -s TOTAL_STACK=16MB \
+    --bind \
+    -std=c++20 \
+    -I./src \
+    -I./build-wasm \
+    -L./build-wasm/src/index \
+    -L./build-wasm/src/engine \
+    -L./build-wasm/src/parser \
+    -L./build-wasm/src/util \
+    ./src/qlever-wasm/QleverWasmReal.cpp \
+    -lindex -lengine -lparser -lutil \
+    -o qlever-wasm-real.js
+
+# Create output directory and copy files
+RUN mkdir -p /output && \
+    cp qlever-wasm-real.js /output/ && \
+    cp qlever-wasm-real.wasm /output/
+
+# List output files
+RUN ls -la /output/

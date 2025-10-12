@@ -1,0 +1,67 @@
+# Alternative Docker build using pre-built Emscripten
+FROM emscripten/emsdk:latest AS builder
+
+# Install additional dependencies needed for QLever
+USER root
+RUN apt-get update && apt-get install -y \
+    ninja-build \
+    libicu-dev \
+    libssl-dev \
+    libzstd-dev \
+    zlib1g-dev \
+    libjemalloc-dev \
+    libboost-all-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy source files
+COPY src /qlever/src/
+COPY test /qlever/test/
+COPY benchmark /qlever/benchmark/
+COPY CMakeLists.txt /qlever/
+COPY CompilationInfo.cmake /qlever/
+
+# Build WASM version of QLever
+WORKDIR /qlever/build-wasm/
+
+# Configure for WASM build
+RUN emcmake cmake -DCMAKE_BUILD_TYPE=Release \
+                  -DLOGLEVEL=INFO \
+                  -DCMAKE_CXX_FLAGS="-Wno-psabi -O3" \
+                  -GNinja \
+                  -DEMSCRIPTEN=ON \
+                  -DUSE_PRECOMPILED_HEADERS=OFF \
+                  ..
+
+# Build the WASM module
+RUN cmake --build . --target qlever-wasm-module
+
+# Runtime stage with nginx
+FROM nginx:alpine AS runtime
+WORKDIR /usr/share/nginx/html
+
+# Copy WASM files
+COPY --from=builder /qlever/build-wasm/qlever-wasm.js ./
+COPY --from=builder /qlever/build-wasm/qlever-wasm.wasm ./
+
+# Copy example files
+COPY examples/wasm/index.html ./
+COPY examples/wasm/README.md ./
+
+# Configure nginx for WASM serving with proper headers
+RUN echo 'server { \
+    listen 80; \
+    server_name localhost; \
+    location / { \
+        root /usr/share/nginx/html; \
+        index index.html; \
+        add_header Cross-Origin-Embedder-Policy require-corp; \
+        add_header Cross-Origin-Opener-Policy same-origin; \
+        location ~* \\.wasm$ { \
+            add_header Content-Type application/wasm; \
+        } \
+    } \
+}' > /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.16)
+project(qlever-wasm-enhanced)
+
+set(CMAKE_CXX_STANDARD 17)
+
+# Add the enhanced WASM source
+add_executable(qlever-wasm-enhanced QleverWasmEnhanced.cpp)
+
+# Set Emscripten-specific options
+set_target_properties(qlever-wasm-enhanced PROPERTIES
+    LINK_FLAGS "-s MODULARIZE=1 -s EXPORT_NAME='createQleverWasmEnhanced' -s EXPORTED_RUNTIME_METHODS='[\"ccall\",\"cwrap\"]' -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=1GB --bind"
+    OUTPUT_NAME "qlever-wasm-enhanced"
+)
+
+# Set compiler flags for optimization
+target_compile_options(qlever-wasm-enhanced PRIVATE -O3 -DNDEBUG)

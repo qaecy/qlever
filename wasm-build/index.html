@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QLever WASM Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 25px;
+        }
+        .section h3 {
+            color: #555;
+            margin-bottom: 10px;
+        }
+        input[type="text"], textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        textarea {
+            height: 120px;
+            font-family: 'Courier New', monospace;
+            resize: vertical;
+        }
+        button {
+            background-color: #007acc;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #005999;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .status.loading {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .results {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .example-queries {
+            background-color: #f0f8ff;
+            border: 1px solid #b3d9ff;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .example-query {
+            background-color: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 5px 0;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .example-query:hover {
+            background-color: #f0f0f0;
+        }
+        .example-query code {
+            display: block;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #333;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        .inline-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        label {
+            font-weight: bold;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 QLever WebAssembly Demo</h1>
+        
+                <div class="section">
+            <h3>� Initialize from RDF Data</h3>
+            <p>Load RDF data directly into an in-memory index (no file system required)</p>
+            <textarea id="rdfData" placeholder="Enter RDF data in Turtle format here...
+Example:
+@prefix ex: <http://example.org/> .
+ex:alice ex:knows ex:bob .
+ex:bob ex:knows ex:charlie .
+ex:alice ex:age 30 .
+ex:bob ex:age 25 .">#
+# Sample RDF data
+@prefix ex: <http://example.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+ex:alice foaf:knows ex:bob .
+ex:bob foaf:knows ex:charlie .
+ex:alice foaf:age 30 .
+ex:bob foaf:age 25 .
+ex:charlie foaf:age 35 .
+ex:alice foaf:name "Alice Smith" .
+ex:bob foaf:name "Bob Jones" .
+ex:charlie foaf:name "Charlie Brown" .
+</textarea>
+            <div class="controls">
+                <div class="inline-group">
+                    <label for="memoryLimit">Memory Limit (MB):</label>
+                    <input type="number" id="memoryLimit" value="1024" min="64" max="8192">
+                </div>
+                <button onclick="initializeFromRdf()">Initialize from RDF</button>
+                <button onclick="loadSampleRdf()">Load Sample RDF</button>
+                <button onclick="clearRdf()">Clear RDF</button>
+            </div>
+        </div>
+
+        <div class="section" style="display: none;" id="legacyInit">
+            <h3>📁 Initialize from Index Path (Legacy)</h3>
+            <p>This method requires a pre-built index on disk</p>
+            <div class="controls">
+                <div class="inline-group">
+                    <label for="indexPath">Index Path:</label>
+                    <input type="text" id="indexPath" value="./databases/test" placeholder="Enter path to QLever index">
+                </div>
+                <div class="inline-group">
+                    <label for="memoryLimitLegacy">Memory Limit (MB):</label>
+                    <input type="number" id="memoryLimitLegacy" value="1024" min="64" max="8192">
+                </div>
+                <button onclick="initializeQLever()">Initialize QLever</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>📚 Example Queries</h3>
+            <div class="example-queries">
+                <div class="example-query" onclick="setQuery(this.textContent)">
+                    <code>SELECT * WHERE { ?s ?p ?o } LIMIT 10</code>
+                </div>
+                <div class="example-query" onclick="setQuery(this.textContent)">
+                    <code>SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }</code>
+                </div>
+                <div class="example-query" onclick="setQuery(this.textContent)">
+                    <code>PREFIX foaf: &lt;http://xmlns.com/foaf/0.1/&gt;&#10;SELECT ?person ?name WHERE {&#10;  ?person foaf:name ?name&#10;} ORDER BY ?name</code>
+                </div>
+                <div class="example-query" onclick="setQuery(this.textContent)">
+                    <code>PREFIX foaf: &lt;http://xmlns.com/foaf/0.1/&gt;&#10;SELECT ?person ?friend WHERE {&#10;  ?person foaf:knows ?friend&#10;}</code>
+                </div>
+                <div class="example-query" onclick="setQuery(this.textContent)">
+                    <code>PREFIX foaf: &lt;http://xmlns.com/foaf/0.1/&gt;&#10;SELECT ?person ?age WHERE {&#10;  ?person foaf:age ?age&#10;  FILTER(?age > 25)&#10;} ORDER BY DESC(?age)</code>
+                </div>
+                <div class="example-query" onclick="setQuery(this.textContent)">
+                    <code>CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } LIMIT 5</code>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>💬 SPARQL Query</h3>
+            <textarea id="queryText" placeholder="Enter your SPARQL query here...">SELECT * WHERE { ?s ?p ?o } LIMIT 10</textarea>
+            <div class="controls">
+                <div class="inline-group">
+                    <label for="outputFormat">Format:</label>
+                    <select id="outputFormat">
+                        <option value="sparql-json">SPARQL JSON</option>
+                        <option value="csv">CSV</option>
+                        <option value="tsv">TSV</option>
+                        <option value="sparql-xml">SPARQL XML</option>
+                        <option value="qlever-json">QLever JSON (with timing)</option>
+                    </select>
+                </div>
+                <button onclick="executeQuery()">Execute Query</button>
+                <button onclick="parseAndPlan()">Parse & Plan Only</button>
+                <button onclick="clearResults()">Clear Results</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>ℹ️ About</h3>
+            <p>This is a WebAssembly (WASM) demonstration of QLever, a fast SPARQL query engine. You can:</p>
+            <ul>
+                <li><strong>Load RDF data</strong> directly into an in-memory index (recommended)</li>
+                <li><strong>Execute SPARQL queries</strong> against the loaded data</li>
+                <li><strong>Parse and plan queries</strong> without executing them</li>
+                <li><strong>Export results</strong> in various formats (JSON, CSV, TSV, XML)</li>
+            </ul>
+            <div class="controls">
+                <button onclick="toggleInitMode()">Switch to Legacy Index Mode</button>
+            </div>
+        </div>
+
+        <div id="status"></div>
+        <div id="results" class="results" style="display: none;"></div>
+    </div>
+
+    <script src="./qlever-wasm.js"></script>
+    <script>
+        let qleverModule = null;
+        let qleverInstance = null;
+
+        // Initialize the WASM module
+        async function initWasm() {
+            try {
+                setStatus('Loading QLever WebAssembly module...', 'loading');
+                
+                // Load the WASM module (Emscripten generated)
+                if (typeof createQleverWasmEnhanced === 'undefined') {
+                    throw new Error('createQleverWasmEnhanced not found. Make sure qlever-wasm.js is loaded.');
+                }
+                
+                qleverModule = await createQleverWasmEnhanced();
+                qleverInstance = new qleverModule.QleverWasmEnhanced();
+                
+                setStatus('QLever WASM module loaded successfully! 🎉', 'success');
+                return true;
+            } catch (error) {
+                setStatus(`Failed to load QLever WASM module: ${error.message}`, 'error');
+                console.error('WASM loading error:', error);
+                return false;
+            }
+        }
+
+        // Initialize QLever with RDF data (new approach)
+        async function initializeFromRdf() {
+            if (!qleverInstance) {
+                setStatus('WASM module not loaded yet. Please wait...', 'error');
+                return;
+            }
+
+            const rdfData = document.getElementById('rdfData').value.trim();
+            const memoryLimit = parseInt(document.getElementById('memoryLimit').value);
+            const rdfFormat = document.getElementById('rdfFormat') ? document.getElementById('rdfFormat').value : 'turtle';
+
+            if (!rdfData) {
+                setStatus('Please enter RDF data', 'error');
+                return;
+            }
+
+            try {
+                setStatus(`Initializing QLever from RDF data (${rdfData.length} chars, ${rdfFormat} format)...`, 'loading');
+                
+                // Use the new initializeFromRdf method if available, otherwise fall back to initialize
+                const result = qleverInstance.initializeFromRdf ? 
+                    qleverInstance.initializeFromRdf(rdfData, rdfFormat) :
+                    qleverInstance.initialize("in-memory-from-rdf", memoryLimit);
+                
+                const response = JSON.parse(result);
+
+                if (response.success) {
+                    setStatus(`QLever initialized successfully! Memory: ${response.memoryLimitMB || memoryLimit}MB, Data: ${response.dataSize || rdfData.length} chars`, 'success');
+                } else {
+                    setStatus(`Initialization failed: ${response.error}`, 'error');
+                }
+                
+                showResults(JSON.stringify(response, null, 2));
+            } catch (error) {
+                setStatus(`Initialization error: ${error.message}`, 'error');
+                console.error('Initialization error:', error);
+            }
+        }
+
+        // Initialize QLever with an index (legacy approach)
+        async function initializeQLever() {
+            if (!qleverInstance) {
+                setStatus('WASM module not loaded yet. Please wait...', 'error');
+                return;
+            }
+
+            const indexPath = document.getElementById('indexPath').value;
+            const memoryLimit = parseInt(document.getElementById('memoryLimitLegacy').value);
+
+            if (!indexPath.trim()) {
+                setStatus('Please enter an index path', 'error');
+                return;
+            }
+
+            try {
+                setStatus(`Initializing QLever with index: ${indexPath}...`, 'loading');
+                const result = qleverInstance.initialize(indexPath, memoryLimit);
+                const response = JSON.parse(result);
+
+                if (response.success) {
+                    setStatus(`QLever initialized successfully! Index: ${response.indexBasename}, Memory: ${response.memoryLimitMB}MB`, 'success');
+                } else {
+                    setStatus(`Initialization failed: ${response.error}`, 'error');
+                }
+                
+                showResults(JSON.stringify(response, null, 2));
+            } catch (error) {
+                setStatus(`Initialization error: ${error.message}`, 'error');
+                console.error('Initialization error:', error);
+            }
+        }
+
+        // Load sample RDF data
+        function loadSampleRdf() {
+            const sampleRdf = `# Sample knowledge graph about people and relationships
+@prefix ex: <http://example.org/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# People
+ex:alice rdf:type foaf:Person .
+ex:bob rdf:type foaf:Person .
+ex:charlie rdf:type foaf:Person .
+ex:diana rdf:type foaf:Person .
+
+# Names
+ex:alice foaf:name "Alice Smith" .
+ex:bob foaf:name "Bob Jones" .
+ex:charlie foaf:name "Charlie Brown" .
+ex:diana foaf:name "Diana Prince" .
+
+# Ages
+ex:alice foaf:age 30 .
+ex:bob foaf:age 25 .
+ex:charlie foaf:age 35 .
+ex:diana foaf:age 28 .
+
+# Relationships
+ex:alice foaf:knows ex:bob .
+ex:bob foaf:knows ex:charlie .
+ex:charlie foaf:knows ex:diana .
+ex:alice foaf:knows ex:diana .
+ex:diana foaf:knows ex:bob .
+
+# Additional properties
+ex:alice ex:location "New York" .
+ex:bob ex:location "San Francisco" .
+ex:charlie ex:location "London" .
+ex:diana ex:location "Paris" .
+
+ex:alice ex:occupation "Engineer" .
+ex:bob ex:occupation "Designer" .
+ex:charlie ex:occupation "Manager" .
+ex:diana ex:occupation "Scientist" .`;
+
+            document.getElementById('rdfData').value = sampleRdf;
+            setStatus('Sample RDF data loaded. Click "Initialize from RDF" to build the index.', 'info');
+        }
+
+        // Clear RDF data
+        function clearRdf() {
+            document.getElementById('rdfData').value = '';
+            setStatus('RDF data cleared', 'info');
+        }
+
+        // Toggle between RDF and legacy initialization
+        function toggleInitMode() {
+            const rdfSection = document.querySelector('.section:first-of-type');
+            const legacySection = document.getElementById('legacyInit');
+            
+            if (legacySection.style.display === 'none') {
+                legacySection.style.display = 'block';
+                rdfSection.style.display = 'none';
+            } else {
+                legacySection.style.display = 'none';
+                rdfSection.style.display = 'block';
+            }
+        }
+
+        // Execute a SPARQL query
+        async function executeQuery() {
+            if (!qleverInstance) {
+                setStatus('Please load the WASM module first', 'error');
+                return;
+            }
+
+            // No isReady() check for enhanced WASM
+
+            const query = document.getElementById('queryText').value;
+            const format = document.getElementById('outputFormat').value;
+
+            if (!query.trim()) {
+                setStatus('Please enter a query', 'error');
+                return;
+            }
+
+            try {
+                setStatus('Executing query...', 'loading');
+                const result = qleverInstance.query(query, format);
+                const response = JSON.parse(result);
+
+                if (response.success) {
+                    setStatus(`Query executed successfully in ${response.executionTimeMs}ms`, 'success');
+                    
+                    // Try to pretty-print the result if it's JSON
+                    let displayResult = response.result;
+                    if (format.includes('json')) {
+                        try {
+                            const parsedResult = JSON.parse(response.result);
+                            displayResult = JSON.stringify(parsedResult, null, 2);
+                        } catch (e) {
+                            // If parsing fails, show the raw result
+                            displayResult = response.result;
+                        }
+                    }
+                    
+                    showResults(displayResult);
+                } else {
+                    setStatus(`Query failed: ${response.error}`, 'error');
+                    showResults(JSON.stringify(response, null, 2));
+                }
+            } catch (error) {
+                setStatus(`Query execution error: ${error.message}`, 'error');
+                console.error('Query error:', error);
+            }
+        }
+
+        // Parse and plan query without executing
+        async function parseAndPlan() {
+            if (!qleverInstance || !qleverInstance.isReady()) {
+                setStatus('Please initialize QLever first', 'error');
+                return;
+            }
+
+            const query = document.getElementById('queryText').value;
+
+            if (!query.trim()) {
+                setStatus('Please enter a query', 'error');
+                return;
+            }
+
+            try {
+                setStatus('Parsing and planning query...', 'loading');
+                const result = qleverInstance.parseAndPlan(query);
+                const response = JSON.parse(result);
+
+                if (response.success) {
+                    setStatus(`Query parsed and planned successfully in ${response.planningTimeMs}ms`, 'success');
+                } else {
+                    setStatus(`Parse/plan failed: ${response.error}`, 'error');
+                }
+                
+                showResults(JSON.stringify(response, null, 2));
+            } catch (error) {
+                setStatus(`Parse/plan error: ${error.message}`, 'error');
+                console.error('Parse/plan error:', error);
+            }
+        }
+
+        // Get current status
+        async function getStatus() {
+            if (!qleverInstance) {
+                setStatus('WASM module not loaded', 'error');
+                return;
+            }
+
+            try {
+                const result = qleverInstance.getStatus();
+                const response = JSON.parse(result);
+                
+                const statusText = response.initialized 
+                    ? `QLever ready with index: ${response.indexBasename}` 
+                    : 'QLever not initialized';
+                    
+                setStatus(statusText, response.initialized ? 'success' : 'error');
+                showResults(JSON.stringify(response, null, 2));
+            } catch (error) {
+                setStatus(`Status error: ${error.message}`, 'error');
+                console.error('Status error:', error);
+            }
+        }
+
+        // Set example query
+        function setQuery(query) {
+            document.getElementById('queryText').value = query.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#10;/g, '\n');
+        }
+
+        // Clear results
+        function clearResults() {
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('results').textContent = '';
+        }
+
+        // Set status message
+        function setStatus(message, type = 'loading') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+        }
+
+        // Show results
+        function showResults(results) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.textContent = results;
+            resultsDiv.style.display = 'block';
+        }
+
+        // Initialize everything when the page loads
+        window.addEventListener('DOMContentLoaded', async function() {
+            setStatus('Initializing QLever WASM Demo...', 'loading');
+            const success = await initWasm();
+            if (!success) {
+                setStatus('Failed to initialize WASM module. Please refresh the page to try again.', 'error');
+            }
+        });
+
+        // Make functions globally accessible
+        window.initializeFromRdf = initializeFromRdf;
+        window.initializeQLever = initializeQLever;
+        window.executeQuery = executeQuery;
+        window.parseAndPlan = parseAndPlan;
+        window.getStatus = getStatus;
+        window.clearResults = clearResults;
+        window.setQuery = setQuery;
+        window.loadSampleRdf = loadSampleRdf;
+        window.clearRdf = clearRdf;
+        window.toggleInitMode = toggleInitMode;
+    </script>
+    </script>
+
+    <!-- Load the QLever WASM module -->
+    <script src="./qlever-wasm.js"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+# Docker build for QLever WASM - Build stage only for file extraction
+FROM --platform=linux/amd64 emscripten/emsdk:latest
+
+# Install additional dependencies needed for QLever
+USER root
+RUN apt-get update && apt-get install -y \
+    ninja-build \
+    libicu-dev \
+    libssl-dev \
+    libzstd-dev \
+    zlib1g-dev \
+    libjemalloc-dev \
+    libboost-all-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install newer CMake (QLever requires 3.27+)
+RUN apt-get update && apt-get install -y wget && \
+    wget https://github.com/Kitware/CMake/releases/download/v3.28.1/cmake-3.28.1-linux-x86_64.tar.gz && \
+    tar -xzf cmake-3.28.1-linux-x86_64.tar.gz -C /opt && \
+    rm cmake-3.28.1-linux-x86_64.tar.gz && \
+    ln -sf /opt/cmake-3.28.1-linux-x86_64/bin/cmake /usr/local/bin/cmake && \
+    ln -sf /opt/cmake-3.28.1-linux-x86_64/bin/ctest /usr/local/bin/ctest && \
+    ln -sf /opt/cmake-3.28.1-linux-x86_64/bin/cpack /usr/local/bin/cpack && \
+    rm -rf /var/lib/apt/lists/*
+
+# Verify CMake version and ICU installation
+RUN cmake --version
+RUN pkg-config --exists icu-uc icu-i18n && echo "ICU found" || echo "ICU not found"
+
+# Copy source files
+COPY src /qlever/src/
+COPY test /qlever/test/
+COPY benchmark /qlever/benchmark/
+COPY CMakeLists.txt /qlever/
+COPY CompilationInfo.cmake /qlever/
+
+# Build WASM version of QLever
+WORKDIR /qlever
+RUN mkdir -p build-wasm
+WORKDIR /qlever/build-wasm
+
+# Configure for WASM build
+RUN emcmake cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLOGLEVEL=INFO \
+    -DCMAKE_CXX_FLAGS="-Wno-psabi -O3" \
+    -GNinja \
+    -DEMSCRIPTEN=ON \
+    -DUSE_PRECOMPILED_HEADERS=OFF \
+    -DREDUCED_FEATURE_SET_FOR_CPP17=ON \
+    ..
+
+# Build the WASM module
+RUN cmake --build . --target qlever-wasm-module
+
+# Verify the files were created
+RUN ls -la /qlever/build-wasm/qlever-wasm.*
+
+# Keep container running for file extraction
+CMD ["tail", "-f", "/dev/null"]

@@ -158,10 +158,16 @@ add_compile_definitions(SPATIALJOIN_NO_BZIP2=True SPATIALJOIN_NO_ZLIB=True)
 ################################
 find_package(Threads REQUIRED)
 
-#################################
-# ICU (for proper collation
-################################
-find_package(ICU 60 REQUIRED COMPONENTS uc i18n)
+
+# ICU (for proper collation)
+option(USE_ICU "Enable ICU for collation and Unicode support" ON)
+if (EMSCRIPTEN)
+    set(USE_ICU OFF CACHE BOOL "Disable ICU for Emscripten/WASM builds" FORCE)
+endif()
+
+if (USE_ICU)
+    find_package(ICU 60 REQUIRED COMPONENTS uc i18n)
+endif()
 
 ###################################
 # JEMALLOC
@@ -202,17 +208,29 @@ else ()
 endif ()
 
 
-######################################
+
 # BOOST
-######################################
-find_package(Boost 1.81 COMPONENTS iostreams program_options url container REQUIRED CONFIG)
-include_directories(${Boost_INCLUDE_DIR})
+option(USE_BOOST "Enable Boost libraries" ON)
+if (EMSCRIPTEN)
+    set(USE_BOOST OFF CACHE BOOL "Disable Boost for Emscripten/WASM builds" FORCE)
+endif()
+
+if (USE_BOOST)
+    find_package(Boost 1.81 COMPONENTS iostreams program_options url container REQUIRED CONFIG)
+    include_directories(${Boost_INCLUDE_DIR})
+endif()
 
 
-######################################
+
 # SSL
-######################################
-find_package(OpenSSL REQUIRED)
+option(USE_OPENSSL "Enable OpenSSL libraries" ON)
+if (EMSCRIPTEN)
+    set(USE_OPENSSL OFF CACHE BOOL "Disable OpenSSL for Emscripten/WASM builds" FORCE)
+endif()
+
+if (USE_OPENSSL)
+    find_package(OpenSSL REQUIRED)
+endif()
 
 ##############################################
 # Define a set of common third-party and self made libraries that are used almost
@@ -221,10 +239,37 @@ find_package(OpenSSL REQUIRED)
 # function `qlever_target_link_libraries` for all libraries and executables. It
 # is a drop-in replacement for `target_link_libraries` that additionally links
 # against the common libraries.
+
 function(qlever_target_link_libraries target)
-    target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
-            absl::flat_hash_set absl::strings absl::str_format ICU::uc
-            ICU::i18n OpenSSL::SSL OpenSSL::Crypto GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json Boost::container)
+    if (USE_ICU AND USE_BOOST AND USE_OPENSSL)
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format ICU::uc
+                ICU::i18n OpenSSL::SSL OpenSSL::Crypto GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json Boost::container)
+    elseif (USE_ICU AND USE_OPENSSL)
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format ICU::uc
+                ICU::i18n OpenSSL::SSL OpenSSL::Crypto GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json)
+    elseif (USE_BOOST AND USE_OPENSSL)
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format OpenSSL::SSL OpenSSL::Crypto GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json Boost::container)
+    elseif (USE_OPENSSL)
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format OpenSSL::SSL OpenSSL::Crypto GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json)
+    elseif (USE_ICU AND USE_BOOST)
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format ICU::uc
+                ICU::i18n GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json Boost::container)
+    elseif (USE_ICU)
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format ICU::uc
+                ICU::i18n GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json)
+    elseif (USE_BOOST)
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json Boost::container)
+    else()
+        target_link_libraries(${target} ${ARGN} absl::compare absl::flat_hash_map
+                absl::flat_hash_set absl::strings absl::str_format GTest::gtest GTest::gmock fsst nlohmann_json::nlohmann_json)
+    endif()
 
     # memorySize is a utility library for defining memory sizes.
     if (NOT ${target} STREQUAL "memorySize")
@@ -291,15 +336,18 @@ FetchContent_Declare(
 )
 
 ################################
+
 # S2 Geometry
 ################################
-set(BUILD_TESTS OFF CACHE BOOL "no tests for s2")
-FetchContent_Declare(
-        s2
-        GIT_REPOSITORY https://github.com/google/s2geometry.git
-        GIT_TAG 5b5eccd54a08ae03b4467e79ffbb076d0b5f221e  #version 0.11.1
-        SYSTEM
-)
+if (NOT EMSCRIPTEN)
+  set(BUILD_TESTS OFF CACHE BOOL "no tests for s2")
+  FetchContent_Declare(
+      s2
+      GIT_REPOSITORY https://github.com/google/s2geometry.git
+      GIT_TAG 5b5eccd54a08ae03b4467e79ffbb076d0b5f221e  #version 0.11.1
+      SYSTEM
+  )
+endif()
 
 
 if (USE_PARALLEL)
@@ -363,11 +411,17 @@ FetchContent_Declare(
 )
 
 ################################
-# Apply FetchContent
 ################################
-FetchContent_MakeAvailable(googletest ctre abseil re2 fsst s2 nlohmann-json antlr range-v3 spatialjoin)
+# Apply FetchContent
+if (NOT EMSCRIPTEN)
+    FetchContent_MakeAvailable(googletest ctre abseil re2 fsst s2 nlohmann-json antlr range-v3 spatialjoin)
+else()
+    FetchContent_MakeAvailable(googletest ctre abseil re2 fsst nlohmann-json antlr range-v3 spatialjoin)
+endif()
 # Disable some warnings in RE2 and GTEST
-target_compile_options(s2 PRIVATE -Wno-sign-compare -Wno-unused-parameter -Wno-class-memaccess -Wno-comment -Wno-redundant-move -Wno-unknown-warning-option -Wno-maybe-uninitialized -Wno-class-memaccess -Wno-unused-but-set-variable -Wno-unused-function)
+if (NOT EMSCRIPTEN)
+    target_compile_options(s2 PRIVATE -Wno-sign-compare -Wno-unused-parameter -Wno-class-memaccess -Wno-comment -Wno-redundant-move -Wno-unknown-warning-option -Wno-maybe-uninitialized -Wno-class-memaccess -Wno-unused-but-set-variable -Wno-unused-function)
+endif()
 target_compile_options(re2 PRIVATE -Wno-unused-parameter)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(gtest PRIVATE -Wno-maybe-uninitialized)
@@ -454,6 +508,7 @@ add_subdirectory(src/rdfTypes)
 add_subdirectory(src/global)
 add_subdirectory(src/libqlever)
 add_subdirectory(src/cli-utils)
+add_subdirectory(src/qlever-wasm)
 add_subdirectory(benchmark)
 
 enable_testing()
