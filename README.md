@@ -25,7 +25,11 @@ An important setting is the vocabulary type. Here are the 5 available types:
 Building an index from the file `misc/test-simple.nq` is handled by the following CLI command:
 
 ```bash
+# Persistent
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain build-index \"\$(cat misc/configs/build-test-index.json)\""
+
+# In-memory
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain build-index \"\$(cat misc/configs/build-test-index-mem.json)\""
 ```
 
 ### Get index stats
@@ -42,13 +46,16 @@ The query command takes a path to the index without suffixes (eg. `./databases/O
 # Example 1 - count all triples:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'SELECT (COUNT(*) as ?count) WHERE { ?s ?p ?o . }'"
 
-# Example 2 - 10 entity mentions:
+# Example 2 - using JSON input:
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-json \"\$(cat misc/configs/query-1.json)\""
+
+# Example 3 - 10 entity mentions:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT * WHERE { ?s qcy:mentions ?o . } LIMIT 10'"
 
-# Example 3 - 10 resolved entities and the documents they are about:
+# Example 4 - 10 resolved entities and the documents they are about:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT * WHERE { ?frag qcy:mentions ?em . ?em qcy:resolvesTo ?canonical } LIMIT 10'"
 
-# Example 4 - CONSTRUCT as raw output
+# Example 5 - CONSTRUCT as raw output
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/OSTT 'CONSTRUCT WHERE { ?s ?p ?o } LIMIT 10' nt /workspace/res.nt"
 ```
 
@@ -82,6 +89,20 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 - Check if quads persist after round trip (and how about RDF*?)
 - Add CLI command for dumping the entire store
 
+### Build and deploy
+```bash
+# x86_64
+docker buildx build --platform linux/amd64 \
+  -f Dockerfiles/Dockerfile.cli-only.alpine \
+  -t europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:alpine-x86_64 \
+  --push .
+
+# aarch64
+docker buildx build \
+  -f Dockerfiles/Dockerfile.cli-only.alpine \ 
+  -t europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:alpine-aarch64 \
+  --push .
+```
 
 ### Use in your app
 ```dockerfile
@@ -90,6 +111,9 @@ FROM your-app-base:latest
 
 # Copy just the binary from the QLever image
 COPY --from=qlever-cli:alpine /qlever/QleverCliMain /usr/local/bin/qlever-cli
+
+# Or from QAECY's artefact registry on GCP
+# COPY --from=europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:alpine-x86_64 /qlever/QleverCliMain /usr/local/bin/qlever-cli
 
 # Install only the runtime dependencies QLever needs
 RUN apk add --no-cache \
@@ -102,7 +126,8 @@ RUN apk add --no-cache \
     jemalloc \
     boost-program_options \
     boost-iostreams \
-    boost-system
+    boost-system \
+    boost-url
 
 # Your app code
 COPY . /app

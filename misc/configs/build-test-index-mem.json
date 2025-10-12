@@ -1,0 +1,9 @@
+{
+  "index_name": "test-mem",
+  "index_directory": "./databases",
+  "input_files": [
+    {"path": "misc/test-simple.nq", "format": "nq"}
+  ],
+  "memory_limit_gb": 2,
+  "vocabulary_type": "in-memory-compressed"
+}

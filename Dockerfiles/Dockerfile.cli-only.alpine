@@ -1,4 +1,4 @@
-FROM alpine:3.19 AS base
+FROM alpine:3.22 AS base
 LABEL maintainer="QLever CLI"
 
 ENV LANG=C.UTF-8
@@ -38,7 +38,7 @@ RUN cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DCMAKE_CXX_FLAGS="-Wno-psa
 RUN cmake --build . --target QleverCliMain --target IndexBuilderMain --target ServerMain
 
 # Runtime stage - very minimal Alpine
-FROM alpine:3.19 AS runtime
+FROM alpine:3.22 AS runtime
 WORKDIR /qlever
 
 # Install minimal runtime dependencies
@@ -52,7 +52,8 @@ RUN apk add --no-cache \
     jemalloc \
     boost-program_options \
     boost-iostreams \
-    boost-system
+    boost-system \
+    boost-url
 
 # Copy the required binaries
 COPY --from=builder /qlever/build/QleverCliMain /qlever/QleverCliMain
