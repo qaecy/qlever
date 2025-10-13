@@ -2,10 +2,6 @@
 
 This is a QAECY version of the Qlever quad store. It extends the existing work with a CLI tool that allows querying a dataset as an embedded database.
 
-## Build
-Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
-Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`
-
 ## Use
 The CLI tool binary is built inside a Docker container for compatibility reasons. Therefore all commands are run through the container.
 
@@ -32,6 +28,18 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain build-index \"\$(cat misc/configs/build-test-index-mem.json)\""
 ```
 
+### Build index from a gzipped stream (stdin)
+You can build an index directly from a gzipped RDF file by unzipping and piping it to the index builder. Use `"path": "-"` in your JSON config to indicate stdin:
+
+```bash
+# Example: Build index from a gzipped NTriples file using stdin
+gunzip -c misc/test-simple.nt.gz | \
+  docker run --rm --user root -i -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine \
+  sh -c "/qlever/QleverCliMain build-index \"\$(cat misc/configs/build-test-index-stdin.json)\""
+```
+
+This will read the uncompressed RDF data from stdin and build the index as usual.
+
 ### Get index stats
 ```bash
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain stats ./databases/OSTT"
@@ -46,16 +54,22 @@ The query command takes a path to the index without suffixes (eg. `./databases/O
 # Example 1 - count all triples:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'SELECT (COUNT(*) as ?count) WHERE { ?s ?p ?o . }'"
 
-# Example 2 - using JSON input:
+# Example 2 - count all triples - result as CSV:
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'SELECT (COUNT(*) as ?count) WHERE { ?s ?p ?o . }' csv"
+
+# Example 3 - using JSON input:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-json \"\$(cat misc/configs/query-1.json)\""
 
-# Example 3 - 10 entity mentions:
+# Example 4 - 10 entity mentions:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT * WHERE { ?s qcy:mentions ?o . } LIMIT 10'"
 
-# Example 4 - 10 resolved entities and the documents they are about:
+# Example 5 - 10 resolved entities and the documents they are about:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT * WHERE { ?frag qcy:mentions ?em . ?em qcy:resolvesTo ?canonical } LIMIT 10'"
 
-# Example 5 - CONSTRUCT as raw output
+# Example 6 - CONSTRUCT as raw output
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/OSTT 'CONSTRUCT WHERE { ?s ?p ?o } LIMIT 10' nt"
+
+# Example 7 - CONSTRUCT to file (size beyond memory limits)
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/OSTT 'CONSTRUCT WHERE { ?s ?p ?o } LIMIT 10' nt /workspace/res.nt"
 ```
 
@@ -82,12 +96,9 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 ### Qlever shortcomings
 - Doesn't support RDF* or RDF 1.2 yet (https://github.com/ad-freiburg/qlever/issues/2169). Won't even load an NQuads file that has RDF* in it.
 
-
-### Todo
-- Build binary inside the container and save it so it can be used in any other container or build the image so it can be used as a base
-- Try loading a zipped baseline
-- Check if quads persist after round trip (and how about RDF*?)
-- Add CLI command for dumping the entire store
+## Build
+Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
+Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`
 
 ### Build and deploy
 ```bash
@@ -150,6 +161,12 @@ result = subprocess.run([
 
 data = json.loads(result.stdout)
 ```
+
+### Todo
+- Try loading a zipped baseline as a readable stream
+- Check if quads persist after round trip (and how about RDF*?)
+- Add CLI command for removing an index
+- Test if loading an index with the same name will overwrite existing
 
 ### Thoughts on saturation
 1. Build index for unsaturated database + schema

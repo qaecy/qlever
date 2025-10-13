@@ -1,8 +1,12 @@
-#include "QueryUtils.h"
+// Consolidated includes
+#include <string>
+#include <stdexcept>
+#include <fstream>
+#include <iostream>
 #include <algorithm>
 #include <cctype>
 #include <sstream>
-#include <iostream>
+#include "QueryUtils.h"
 #include "util/Log.h"
 #include "util/json.h"
 #include "util/http/MediaTypes.h"
@@ -13,13 +17,53 @@ namespace cli_utils {
 // QueryExecutor Implementation
 // =============================================================================
 
+std::string QueryExecutor::executeConstructQueryToString(const std::string& query, const std::string& outputFormat) {
+    if (!isConstructQuery(query)) {
+        throw std::invalid_argument("Query is not a CONSTRUCT query");
+    }
+    // Only nt and nq supported
+    if (outputFormat != "nt" && outputFormat != "nq") {
+        throw std::invalid_argument("Only nt and nq formats are supported for CONSTRUCT queries");
+    }
+    // QLever always returns CONSTRUCT as Turtle (NT-compatible), so we can use the result directly
+    std::string rawResults;
+    // Redirect QLever's verbose logging
+    std::streambuf* clogBuf = std::clog.rdbuf();
+    std::ofstream devNull("/dev/null");
+    std::clog.rdbuf(devNull.rdbuf());
+    try {
+        rawResults = qlever_->query(query, ad_utility::MediaType::turtle);
+        std::clog.rdbuf(clogBuf);
+    } catch (...) {
+        std::clog.rdbuf(clogBuf);
+        throw;
+    }
+    // If nq is requested, we need to convert each line to N-Quads (add default graph)
+    if (outputFormat == "nq") {
+        std::istringstream in(rawResults);
+        std::ostringstream out;
+        std::string line;
+        // Use default graph: <http://default.graph/>
+        const std::string defaultGraph = " <http://default.graph/> .\n";
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '.') {
+                // Remove trailing dot and add default graph
+                line.pop_back();
+                out << line << defaultGraph;
+            }
+        }
+        return out.str();
+    }
+    // Otherwise, just return as NT
+    return rawResults;
+}
+
 QueryExecutor::QueryExecutor(std::shared_ptr<qlever::Qlever> qlever) : qlever_(qlever) {}
 
 std::string QueryExecutor::executeQuery(const std::string& query, const std::string& format) {
     if (isConstructQuery(query)) {
         throw std::invalid_argument("Use executeConstructQuery for CONSTRUCT queries");
     }
-    
     // Convert format string to MediaType
     ad_utility::MediaType mediaType;
     if (format == "csv") {
@@ -47,6 +91,7 @@ std::string QueryExecutor::executeQuery(const std::string& query, const std::str
         std::clog.rdbuf(clogBuf); // Restore logging even on exception
         throw;
     }
+
 }
 
 void QueryExecutor::executeConstructQuery(const std::string& query, const std::string& outputFormat, 
@@ -110,6 +155,7 @@ void QueryExecutor::executeConstructQuery(const std::string& query, const std::s
         std::cerr << " (" << static_cast<int>(progress.getItemsPerSecond(tripleCount)) << "/sec)";
     }
     std::cerr << std::endl;
+
 }
 
 bool QueryExecutor::isConstructQuery(const std::string& query) {
@@ -129,6 +175,7 @@ bool QueryExecutor::isConstructQuery(const std::string& query) {
     }
     
     return start < upperQuery.length() && upperQuery.substr(start, 9) == "CONSTRUCT";
+
 }
 
 std::string QueryExecutor::extractValue(const std::string& json, const std::string& key) {

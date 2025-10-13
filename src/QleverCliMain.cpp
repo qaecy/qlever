@@ -123,30 +123,75 @@ void printUsage(const char* programName) {
     std::cerr << "  on-disk-compressed-geo-split - Required for GeoSPARQL support\n";
 }
 
+// Helper to trim and uppercase a string (for query type detection)
+#include <algorithm>
+#include <cctype>
+std::string trimAndUpper(const std::string& s) {
+    auto start = s.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    auto end = s.find_first_of(" \t\n\r", start);
+    std::string firstWord = s.substr(start, end - start);
+    std::transform(firstWord.begin(), firstWord.end(), firstWord.begin(), ::toupper);
+    return firstWord;
+}
+
 int executeQuery(const std::string& indexBasename, const std::string& queryStr, 
-                const std::string& format = "sparql-json") {
+                const std::string& userFormat = "") {
     try {
+        // Detect query type
+        std::string type = trimAndUpper(queryStr);
+        std::string format = userFormat;
+        // Set default format if not overridden
+        if (format.empty()) {
+            if (type == "SELECT" || type == "ASK") {
+                format = "sparql-json";
+            } else if (type == "CONSTRUCT" || type == "DESCRIBE") {
+                format = "nt";
+            } else {
+                format = "sparql-json"; // fallback
+            }
+        }
+
+        // Validate/normalize format for each query type
+        if (type == "SELECT" || type == "ASK") {
+            if (format != "sparql-json" && format != "csv" && format != "tsv") {
+                throw std::runtime_error("Unsupported format for SELECT/ASK: " + format + ". Use sparql-json, csv, or tsv.");
+            }
+        } else if (type == "CONSTRUCT" || type == "DESCRIBE") {
+            if (format != "nt" && format != "nq") {
+                throw std::runtime_error("Unsupported format for CONSTRUCT/DESCRIBE: " + format + ". Use nt or nq.");
+            }
+        }
+
         // Redirect QLever's verbose logging to /dev/null during query execution
         std::streambuf* clogBuf = std::clog.rdbuf();
         std::streambuf* cerrBuf = std::cerr.rdbuf();
         std::ofstream devNull("/dev/null");
         std::clog.rdbuf(devNull.rdbuf());
         std::cerr.rdbuf(devNull.rdbuf());
-        
+
         // Load index
         qlever::EngineConfig config;
         config.baseName_ = indexBasename;
         config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
-        
+
         auto qlever = std::make_shared<qlever::Qlever>(config);
         cli_utils::QueryExecutor executor(qlever);
-        
-        std::string result = executor.executeQuery(queryStr, format);
-        
+        std::string result;
+
+        if (type == "CONSTRUCT" || type == "DESCRIBE") {
+            // For CONSTRUCT and DESCRIBE, use the construct executor
+            // (no file output, just return as string)
+            result = executor.executeConstructQueryToString(queryStr, format);
+        } else {
+            // For SELECT, ASK, use the standard executor
+            result = executor.executeQuery(queryStr, format);
+        }
+
         // Restore logging
         std::clog.rdbuf(clogBuf);
         std::cerr.rdbuf(cerrBuf);
-        
+
         std::cout << result << std::endl;
         return 0;
     } catch (const std::exception& e) {
@@ -308,8 +353,10 @@ int main(int argc, char* argv[]) {
     }
     
     try {
-        if (command == "query" && argc == 4) {
-            return executeQuery(argv[2], argv[3]);
+        if (command == "query" && (argc == 4 || argc == 5)) {
+            // query <index_basename> <sparql_query> [format]
+            std::string format = (argc == 5) ? argv[4] : "";
+            return executeQuery(argv[2], argv[3], format);
         }
         else if (command == "query-to-file" && argc == 6) {
             return executeQueryToFile(argv[2], argv[3], argv[4], argv[5]);

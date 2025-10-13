@@ -23,6 +23,9 @@ public:
     // Execute CONSTRUCT query with streaming output to file
     void executeConstructQuery(const std::string& query, const std::string& outputFormat, 
                              const std::string& outputFile = "");
+
+    // Execute CONSTRUCT query and return result as string (for CLI output)
+    std::string executeConstructQueryToString(const std::string& query, const std::string& outputFormat);
     
     // Check if query is a CONSTRUCT query
     static bool isConstructQuery(const std::string& query);
