@@ -111,14 +111,20 @@ std::string IndexBuilder::processInputFiles(const json& inputFiles, qlever::Inde
             return "Input file must be a string path or object with 'path' property";
         }
 
-        // Check if file exists
-        if (!std::filesystem::exists(filepath)) {
-            return "Input file does not exist: " + filepath;
+        // Allow '-' or '/dev/stdin' for stdin, skip file existence check in that case
+        if (filepath != "-" && filepath != "/dev/stdin") {
+            if (!std::filesystem::exists(filepath)) {
+                return "Input file does not exist: " + filepath;
+            }
+        }
+
+        // For compatibility with IndexBuilderMain, map '-' to '/dev/stdin'
+        if (filepath == "-") {
+            filepath = "/dev/stdin";
         }
 
         config.inputFiles_.emplace_back(filepath, filetype);
     }
-    
     return ""; // Success
 }
 
