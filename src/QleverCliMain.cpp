@@ -86,7 +86,7 @@ std::string extractValue(const json& binding) {
 void printUsage(const char* programName) {
     std::cerr << "Usage: " << programName << " <command> [options]\n\n";
     std::cerr << "Commands:\n";
-    std::cerr << "  query       <index_basename> <sparql_query>   Execute SPARQL query\n";
+    std::cerr << "  query       <index_basename> <sparql_query> [output_format]  Execute SPARQL query\n";
     std::cerr << "  query-to-file <index_basename> <sparql_query> <format> <output_file>  Execute CONSTRUCT query to file\n";
     std::cerr << "  query-json  <json_input>                      Execute query from JSON input\n";
     std::cerr << "  stats       <index_basename>                  Get index statistics\n";
