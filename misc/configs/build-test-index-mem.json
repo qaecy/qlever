@@ -5,5 +5,5 @@
     {"path": "misc/test-simple.nq", "format": "nq"}
   ],
   "memory_limit_gb": 2,
-  "vocabulary_type": "in-memory-compressed"
+  "vocabulary_type": "on-disk-compressed-geo-split"
 }

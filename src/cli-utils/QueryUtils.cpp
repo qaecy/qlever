@@ -18,9 +18,6 @@ namespace cli_utils {
 // =============================================================================
 
 std::string QueryExecutor::executeConstructQueryToString(const std::string& query, const std::string& outputFormat) {
-    if (!isConstructQuery(query)) {
-        throw std::invalid_argument("Query is not a CONSTRUCT query");
-    }
     // Only nt and nq supported
     if (outputFormat != "nt" && outputFormat != "nq") {
         throw std::invalid_argument("Only nt and nq formats are supported for CONSTRUCT queries");
@@ -61,9 +58,6 @@ std::string QueryExecutor::executeConstructQueryToString(const std::string& quer
 QueryExecutor::QueryExecutor(std::shared_ptr<qlever::Qlever> qlever) : qlever_(qlever) {}
 
 std::string QueryExecutor::executeQuery(const std::string& query, const std::string& format) {
-    if (isConstructQuery(query)) {
-        throw std::invalid_argument("Use executeConstructQuery for CONSTRUCT queries");
-    }
     // Convert format string to MediaType
     ad_utility::MediaType mediaType;
     if (format == "csv") {
@@ -96,9 +90,7 @@ std::string QueryExecutor::executeQuery(const std::string& query, const std::str
 
 void QueryExecutor::executeConstructQuery(const std::string& query, const std::string& outputFormat, 
                                         const std::string& outputFile) {
-    if (!isConstructQuery(query)) {
-        throw std::invalid_argument("Query is not a CONSTRUCT query");
-    }
+    // Let QLever handle query validation; do not pre-check for CONSTRUCT
     
     // Create output writer
     RdfOutputWriter writer(outputFormat, outputFile);
@@ -158,25 +150,6 @@ void QueryExecutor::executeConstructQuery(const std::string& query, const std::s
 
 }
 
-bool QueryExecutor::isConstructQuery(const std::string& query) {
-    std::string upperQuery = query;
-    std::transform(upperQuery.begin(), upperQuery.end(), upperQuery.begin(), ::toupper);
-    
-    // Remove leading whitespace and comments
-    size_t start = 0;
-    while (start < upperQuery.length() && (std::isspace(upperQuery[start]) || upperQuery[start] == '#')) {
-        if (upperQuery[start] == '#') {
-            // Skip to end of line
-            while (start < upperQuery.length() && upperQuery[start] != '\n') {
-                start++;
-            }
-        }
-        start++;
-    }
-    
-    return start < upperQuery.length() && upperQuery.substr(start, 9) == "CONSTRUCT";
-
-}
 
 std::string QueryExecutor::extractValue(const std::string& json, const std::string& key) {
     try {

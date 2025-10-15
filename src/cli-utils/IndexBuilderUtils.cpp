@@ -118,10 +118,8 @@ std::string IndexBuilder::processInputFiles(const json& inputFiles, qlever::Inde
             }
         }
 
-        // For compatibility with IndexBuilderMain, map '-' to '/dev/stdin'
-        if (filepath == "-") {
-            filepath = "/dev/stdin";
-        }
+
+        // If filepath is '-', leave as is. Downstream code should detect '-' and use std::cin directly.
 
         config.inputFiles_.emplace_back(filepath, filetype);
     }

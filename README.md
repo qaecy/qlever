@@ -97,8 +97,9 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 - Doesn't support RDF* or RDF 1.2 yet (https://github.com/ad-freiburg/qlever/issues/2169). Won't even load an NQuads file that has RDF* in it.
 
 ## Build
-Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
 Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`
+Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
+Debian image: `docker build -f Dockerfiles/Dockerfile.cli-only.debian -t qlever-cli:alpine .`
 
 ### Build and deploy
 ```bash
@@ -180,3 +181,69 @@ data = json.loads(result.stdout)
 ### Image size
 Ubuntu: 399 MB
 Alpine: 267 MB
+
+### Load speed
+NEST with raw texts (10,234,017 quads).
+
+#### Comparing loading methods
+Piping gzip and then loading: 1:02.52
+Loading non gzipped: 1:11.90
+Splitting in chunks of 1M lines (13 files) and loading them all: 1:11.09
+
+#### Comparing loading vocabulary types (all with 1M line chunks)
+on-disk-compressed: 1:11.09
+in-memory-compressed: 1:10.77
+in-memory-uncompressed: 1:16.13
+on-disk-compressed-geo-split: 1:14.61
+
+NEST without raw texts (10,201,499 quads).
+This is faster, probably because the text processing is less demanding. But it's not so significant.
+
+Loading gzipped: 59.145
+Loading non gzipped: 54.311
+
+#### Inference query
+```bash
+# 1. super-type through rdfs:subClassOf
+# <a> a <Car> . <Car> rdfs:subClassOf <Vehicle>
+# --> <a> a <Vehicle>
+# NEST: executionTimeMs:8665, Total triples: 886,529
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/NEST 'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> CONSTRUCT { ?a a ?sc } WHERE { ?a a ?cl . ?cl rdfs:subClassOf ?sc }' nt /workspace/implicit1.nt"
+
+# 2. super-relationship through rdfs:subPropertyOf
+# <m1> qcy:hasAddress <m2> . qcy:hasAddress rdfs:subPropertyOf qcy:relatedEntity
+# --> <m1> qcy:relatedEntity <m2>
+# NEST: executionTimeMs:14161, Total triples: 1,298,508
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/NEST 'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> CONSTRUCT { ?s ?sp ?o } WHERE { ?s ?p ?o . ?p rdfs:subPropertyOf ?sp }' nt /workspace/implicit2.nt"
+
+# 3. qcy:about through FileContent and Fragment mentionings
+# <fileContent> qcy:about <canonical> 
+# <fragment> qcy:about <canonical>
+# NEST: executionTimeMs:2922, Total triples: 209,830
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/NEST 'PREFIX qcy: <https://dev.qaecy.com/ont#> CONSTRUCT { ?fc qcy:about ?c . } WHERE { ?fc qcy:containsFragment*/qcy:mentions ?m . ?m qcy:resolvesTo ?c . }' nt /workspace/implicit3.nt"
+
+# 4. mention relationships to canonical relationships
+# <m1> qcy:relatedEntity <m2> . <m1> qcy:resolvesTo <c1> . <m2> qcy:resolvesTo <c2>
+# --> <c1> qcy:relatedEntity <c1>
+# NEST: executionTimeMs:255, Total triples: 6,994
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/NEST 'PREFIX qcy: <https://dev.qaecy.com/ont#> CONSTRUCT { ?c1 ?p ?c2 } WHERE { ?m1 ?p ?m2 . ?m1 qcy:subPropertyOf*/qcy:relatedEntity ?m2 . ?m1 qcy:resolvesTo ?c1 . ?m2 qcy:resolvesTo ?c2 }' nt /workspace/implicit4.nt"
+
+# 5. Implicitly contained fragments (fragments of fragments)
+# <f1> qcy:containsFragment <f2> . <f2> qcy:containsFragment <f3>
+# --> <f1> qcy:implicitlyContainsFragment <f3>
+# NEST: executionTimeMs:6, Total triples: 0
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/NEST 'PREFIX qcy: <https://dev.qaecy.com/ont#> CONSTRUCT { ?fc qcy:implicitlyContainsFragment ?f } WHERE { ?fc qcy:containsFragment ?f MINUS{?fc qcy:containsFragment ?f} }' nt /workspace/implicit5.nt"
+
+# Implicit: 2,401,861
+# Explicit: 9,003,298
+# Total:   11,405,159
+# Expansion: 27 %
+
+# Total time: 26009 ms
+# 92,3 triples/ms
+# ~92,350 triples/s
+
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/NEST 'SELECT (COUNT(*) AS ?count) WHERE { { ?s ?p ?o } UNION { GRAPH ?g {?s ?p ?o} } }'"
+```
+
+## Filtering out unnecessary stuff

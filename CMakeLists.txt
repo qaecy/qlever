@@ -205,7 +205,7 @@ endif ()
 ######################################
 # BOOST
 ######################################
-find_package(Boost 1.81 COMPONENTS iostreams program_options url container REQUIRED CONFIG)
+find_package(Boost 1.74 COMPONENTS iostreams program_options url container REQUIRED CONFIG)
 include_directories(${Boost_INCLUDE_DIR})
 
 

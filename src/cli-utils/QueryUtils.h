@@ -26,10 +26,7 @@ public:
 
     // Execute CONSTRUCT query and return result as string (for CLI output)
     std::string executeConstructQueryToString(const std::string& query, const std::string& outputFormat);
-    
-    // Check if query is a CONSTRUCT query
-    static bool isConstructQuery(const std::string& query);
-    
+        
     // Extract value from JSON string (utility function)
     static std::string extractValue(const std::string& json, const std::string& key);
 };
