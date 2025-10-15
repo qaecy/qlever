@@ -71,6 +71,12 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 
 # Example 7 - CONSTRUCT to file (size beyond memory limits)
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/OSTT 'CONSTRUCT WHERE { ?s ?p ?o } LIMIT 10' nt /workspace/res.nt"
+
+# Example 7 - DESCRIBE as raw output
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'DESCRIBE <http://example.org/subject1>' nt"
+
+# Example 8 - ASK as raw output
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'ASK WHERE { <http://example.org/subject1> ?p ?o }'"
 ```
 
 **Note: UPDATE queries (INSERT, DELETE) are not supported in CLI mode. These require the QLever server interface for proper execution.**
@@ -99,20 +105,32 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 ## Build
 Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`
 Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
-Debian image: `docker build -f Dockerfiles/Dockerfile.cli-only.debian -t qlever-cli:alpine .`
+Debian image: `docker build -f Dockerfiles/Dockerfile.cli-only.debian -t qlever-cli:debian .`
 
 ### Build and deploy
 ```bash
-# x86_64
+# alpine x86_64
 docker buildx build --platform linux/amd64 \
   -f Dockerfiles/Dockerfile.cli-only.alpine \
   -t europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:alpine-x86_64 \
   --push .
 
-# aarch64
+# ubuntu x86_64
+docker buildx build --platform linux/amd64 \
+  -f Dockerfiles/Dockerfile.cli-only.ubuntu \
+  -t europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:ubuntu-x86_64 \
+  --push .
+
+# alpine aarch64
 docker buildx build \
   -f Dockerfiles/Dockerfile.cli-only.alpine \ 
   -t europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:alpine-aarch64 \
+  --push .
+
+# ubuntu arm64
+docker buildx build --platform linux/arm64 \
+  -f Dockerfiles/Dockerfile.cli-only.ubuntu \
+  -t europe-west6-docker.pkg.dev/qaecy-mvp-406413/databases/qlever-cli:ubuntu-aarch64 \
   --push .
 ```
 
