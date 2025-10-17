@@ -35,7 +35,7 @@ COPY CompilationInfo.cmake /qlever/
 # Build essential QLever binaries
 WORKDIR /qlever/build/
 RUN cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DCMAKE_CXX_FLAGS="-Wno-psabi" -GNinja ..
-RUN cmake --build . --target QleverCliMain --target IndexBuilderMain --target ServerMain
+RUN cmake --build . --target QleverCliMain --target IndexBuilderMain
 
 # Runtime stage - very minimal Alpine
 FROM alpine:3.22 AS runtime
@@ -58,9 +58,8 @@ RUN apk add --no-cache \
 # Copy the required binaries
 COPY --from=builder /qlever/build/QleverCliMain /qlever/QleverCliMain
 COPY --from=builder /qlever/build/IndexBuilderMain /qlever/IndexBuilderMain
-COPY --from=builder /qlever/build/ServerMain /qlever/ServerMain
 
-RUN chmod +x /qlever/QleverCliMain /qlever/IndexBuilderMain /qlever/ServerMain
+RUN chmod +x /qlever/QleverCliMain /qlever/IndexBuilderMain
 
 # Direct entrypoint to our CLI
 ENTRYPOINT ["/qlever/QleverCliMain"]

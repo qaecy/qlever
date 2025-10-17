@@ -88,7 +88,7 @@ void printUsage(const char* programName) {
     std::cerr << "Commands:\n";
     std::cerr << "  query       <index_basename> <sparql_query> [output_format]  Execute SPARQL query\n";
     std::cerr << "  query-to-file <index_basename> <sparql_query> <format> <output_file>  Execute CONSTRUCT query to file\n";
-    std::cerr << "  query-json  <json_input>                      Execute query from JSON input\n";
+    // std::cerr << "  query-json  <json_input>                      Execute query from JSON input\n";
     std::cerr << "  stats       <index_basename>                  Get index statistics\n";
     std::cerr << "  build-index <json_input>                      Build index from RDF files\n";
     std::cerr << "  serialize   <index_basename> <format> [output_file]  Dump database content\n";
@@ -114,6 +114,7 @@ void printUsage(const char* programName) {
     std::cerr << "  \"keep_temp_files\": false,    // optional\n";
     std::cerr << "  \"vocabulary_type\": \"on-disk-compressed-geo-split\",  // optional, for GeoSPARQL support\n";
     std::cerr << "  \"add_words_from_literals\": true  // optional, for text index\n";
+    std::cerr << "  \"prefixes_for_id_encoded_iris\": [\"http://example.org/prefix/\"]  // optional, for text index\n";
     std::cerr << "}\n";
     std::cerr << "\nVocabulary types:\n";
     std::cerr << "  in-memory-uncompressed     - Fast but uses more memory\n";
@@ -311,29 +312,6 @@ int executeQueryToFile(const std::string& indexBasename, const std::string& quer
     }
 }
 
-int executeJsonQuery(const std::string& jsonInput) {
-    try {
-        json input = json::parse(jsonInput);
-        
-        // Validate required fields
-        if (!input.contains("indexBasename") || !input.contains("query")) {
-            json response = createErrorResponse("Missing required fields: indexBasename, query");
-            std::cout << response.dump() << std::endl;
-            return 1;
-        }
-        
-        std::string indexBasename = input["indexBasename"];
-        std::string queryStr = input["query"];
-        std::string format = input.value("format", "sparql-json");
-        
-        return executeQuery(indexBasename, queryStr, format);
-        
-    } catch (const json::parse_error& e) {
-        json response = createErrorResponse("Invalid JSON input: " + std::string(e.what()));
-        std::cout << response.dump() << std::endl;
-        return 1;
-    }
-}
 
 int main(int argc, char* argv[]) {
     // Redirect QLever logging to stderr so only JSON goes to stdout
@@ -361,9 +339,9 @@ int main(int argc, char* argv[]) {
         else if (command == "query-to-file" && argc == 6) {
             return executeQueryToFile(argv[2], argv[3], argv[4], argv[5]);
         }
-        else if (command == "query-json" && argc == 3) {
-            return executeJsonQuery(argv[2]);
-        }
+        // else if (command == "query-json" && argc == 3) {
+        //     return executeJsonQuery(argv[2]);
+        // }
         else if (command == "stats" && argc == 3) {
             return getIndexStats(argv[2]);
         }

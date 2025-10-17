@@ -56,7 +56,16 @@ json IndexBuilder::buildIndex(const json& jsonInput) {
 
         // Validate and build index
         config.validate();
-        
+
+        // Log the effective memory limit for index building
+        if (config.memoryLimit_.has_value()) {
+            std::cerr << "[QLever] Index build memory limit: "
+                      << config.memoryLimit_.value().getBytes() / (1024 * 1024 * 1024.0)
+                      << " GB (" << config.memoryLimit_.value().getBytes() << " bytes)" << std::endl;
+        } else {
+            std::cerr << "[QLever] Index build memory limit: default (unspecified)" << std::endl;
+        }
+
         auto startTime = std::chrono::steady_clock::now();
         qlever::Qlever::buildIndex(config);
         auto endTime = std::chrono::steady_clock::now();
@@ -164,6 +173,17 @@ std::string IndexBuilder::processOptionalParameters(const json& input, qlever::I
     // Add words from literals (for text index)
     if (input.contains("add_words_from_literals") && input["add_words_from_literals"].is_boolean()) {
         config.addWordsFromLiterals_ = input["add_words_from_literals"];
+    }
+
+    // Prefixes for ID-encoded IRIs
+    if (input.contains("prefixes_for_id_encoded_iris") && input["prefixes_for_id_encoded_iris"].is_array()) {
+        config.prefixesForIdEncodedIris_.clear();
+        for (const auto& prefix : input["prefixes_for_id_encoded_iris"]) {
+            if (!prefix.is_string()) {
+                return "All entries in prefixes_for_id_encoded_iris must be strings";
+            }
+            config.prefixesForIdEncodedIris_.push_back(prefix.get<std::string>());
+        }
     }
 
     return ""; // Success
