@@ -27,6 +27,7 @@ public:
      *   - settings_file: path to settings file (optional)
      *   - keep_temp_files: whether to keep temporary files (optional)
      *   - vocabulary_type: vocabulary type for GeoSPARQL support (optional)
+     *   - prefixes_for_id_encoded_iris: array of IRI prefixes (optional)
      * 
      * @return JSON response with build results or error information
      */

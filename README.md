@@ -57,19 +57,16 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 # Example 2 - count all triples - result as CSV:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'SELECT (COUNT(*) as ?count) WHERE { ?s ?p ?o . }' csv"
 
-# Example 3 - using JSON input:
-docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-json \"\$(cat misc/configs/query-1.json)\""
-
-# Example 4 - 10 entity mentions:
+# Example 3 - 10 entity mentions:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT * WHERE { ?s qcy:mentions ?o . } LIMIT 10'"
 
-# Example 5 - 10 resolved entities and the documents they are about:
+# Example 4 - 10 resolved entities and the documents they are about:
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT * WHERE { ?frag qcy:mentions ?em . ?em qcy:resolvesTo ?canonical } LIMIT 10'"
 
-# Example 6 - CONSTRUCT as raw output
+# Example 5 - CONSTRUCT as raw output
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/OSTT 'CONSTRUCT WHERE { ?s ?p ?o } LIMIT 10' nt"
 
-# Example 7 - CONSTRUCT to file (size beyond memory limits)
+# Example 6 - CONSTRUCT to file (size beyond memory limits)
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query-to-file ./databases/OSTT 'CONSTRUCT WHERE { ?s ?p ?o } LIMIT 10' nt /workspace/res.nt"
 
 # Example 7 - DESCRIBE as raw output
@@ -263,5 +260,3 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/NEST 'SELECT (COUNT(*) AS ?count) WHERE { { ?s ?p ?o } UNION { GRAPH ?g {?s ?p ?o} } }'"
 ```
-
-## Filtering out unnecessary stuff
