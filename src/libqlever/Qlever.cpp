@@ -7,11 +7,61 @@
 #include "libqlever/Qlever.h"
 
 #include "engine/ExportQueryExecutionTrees.h"
+#include "engine/ExecuteUpdate.h"
 #include "index/IndexImpl.h"
 #include "index/TextIndexBuilder.h"
 #include "parser/SparqlParser.h"
 
 namespace qlever {
+// ___________________________________________________________________________
+void Qlever::update(const std::string& updateQuery) {
+  // Parse the update query using the correct update parser
+  auto parsedQueries = SparqlParser::parseUpdate(
+      index_.getImpl().getBlankNodeManager(),
+      &index_.getImpl().encodedIriManager(),
+      updateQuery,
+      {});
+  if (parsedQueries.empty()) {
+    throw std::runtime_error("No valid SPARQL UPDATE found.");
+  }
+    auto parsedQuery = parsedQueries[0]; // Make a non-const copy
+
+  // Plan the update (create execution tree for WHERE clause, if present)
+  auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
+  QueryExecutionContext qec(index_, &cache_, allocator_, sortPerformanceEstimator_, &namedResultCache_);
+  QueryPlanner planner{&qec, handle};
+  planner.setEnablePatternTrick(enablePatternTrick_);
+    auto qet = planner.createExecutionTree(parsedQuery);
+
+  // Execute the update while holding the DeltaTriples lock via the
+  // DeltaTriplesManager::modify method. This mirrors how the server runs
+  // updates and avoids accessing protected members directly.
+  ad_utility::timer::TimeTracer tracer{"Qlever::update"};
+
+  // Run the update under the DeltaTriplesManager to ensure correct
+  // synchronization and snapshot updates. We persist the update to disk
+  // after a successful modification (outside the locked region) to avoid
+  // performing IO while holding the lock.
+    auto updateResult = index_.deltaTriplesManager().modify<UpdateMetadata>(
+        [this, parsedQuery, qet, handle, &tracer](DeltaTriples& deltaTriples) mutable {
+          // ExecuteUpdate expects a DeltaTriples& and a TimeTracer.
+          return ExecuteUpdate::executeUpdate(index_, parsedQuery, qet,
+                                              deltaTriples, handle, tracer);
+        });
+
+  // Persist the update if enabled (append to update file). Keep this IO
+  // outside of the locked modify above.
+  std::string baseName = index_.getOnDiskBase();
+  bool persist = true;
+  if (persist && !baseName.empty()) {
+    std::string updateFile = baseName + ".update-triples";
+    std::ofstream out(updateFile, std::ios::app);
+    if (!out) {
+      throw std::runtime_error("Failed to open update file for appending: " + updateFile);
+    }
+    out << updateQuery << "\n";
+  }
+}
 
 // _____________________________________________________________________________
 Qlever::Qlever(const EngineConfig& config)

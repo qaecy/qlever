@@ -166,6 +166,9 @@ struct EngineConfig : CommonConfig {
 // Class to use QLever as an embedded database, without the HTTP server. See
 // `src/engine/LibQleverExample.cpp` for an example use.
 class Qlever {
+ public:
+  // Execute a SPARQL UPDATE query (INSERT, DELETE, etc.)
+  void update(const std::string& updateQuery);
  private:
   // The cache is threadsafe, so making it `mutable` is reasonably safe.
   mutable QueryResultCache cache_;
