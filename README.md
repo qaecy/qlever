@@ -76,7 +76,29 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/test 'ASK WHERE { <http://example.org/subject1> ?p ?o }'"
 ```
 
-**Note: UPDATE queries (INSERT, DELETE) are not supported in CLI mode. These require the QLever server interface for proper execution.**
+### Named queries
+A query can be tagged with a name for later use (NB! cache is not persisted so this doesn't make much sense in the given use case):
+```bash
+# 1. ADD QUERY NAMED "fc-mentions"
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/OSTT 'PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT ?fc ?m ?val WHERE { ?fc a qcy:FileContent ; qcy:containsFragment*/qcy:mentions ?m . ?m a qcy:EntityMention ; qcy:value ?val }' csv fc-mentions"
+
+# 2. Execute "fc-mentions" query
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/OSTT 'SELECT ?fc ?m ?val WHERE { SERVICE ql:cached-result-with-name-fc-mentions {} } LIMIT 5' csv"
+```
+
+### Update queries
+In order for this to work we had to extend `src/libqlever` with an update query function. I uses the same logic as the server and stores the delta triples in `<index_name>.update-triples`. These are then included in all query evaluations in the future. Therefore, it's not as fast to query over the delta triples as it is to query data in the original index. The difference is quite significant in the count query demonstrated below (almost 13 times slower to evaluate over the new index with 245k delta triples):
+
+```bash
+# 1. Count all (9,003,298 on NEST in 0.386)
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/NEST 'SELECT (COUNT(*) AS ?count) WHERE { { ?s ?p ?o } UNION { GRAPH ?g {?s ?p ?o} } }'"
+
+# 2. Run first update query (3.225 on NEST)
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain update ./databases/NEST 'PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> INSERT { ?a a ?sc } WHERE { ?a a ?cl . ?cl rdfs:subClassOf ?sc }'"
+
+# 3. Count all (9,248,305 on NEST in 4.885)
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/NEST 'SELECT (COUNT(*) AS ?count) WHERE { { ?s ?p ?o } UNION { GRAPH ?g {?s ?p ?o} } }'"
+```
 
 ### Serialize
 The serialize command allows dumping the whole database in either nt or nq format.
@@ -218,6 +240,7 @@ Loading gzipped: 59.145
 Loading non gzipped: 54.311
 
 #### Inference query
+
 ```bash
 # 1. super-type through rdfs:subClassOf
 # <a> a <Car> . <Car> rdfs:subClassOf <Vehicle>

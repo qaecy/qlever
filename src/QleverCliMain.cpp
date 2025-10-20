@@ -86,9 +86,10 @@ std::string extractValue(const json& binding) {
 void printUsage(const char* programName) {
     std::cerr << "Usage: " << programName << " <command> [options]\n\n";
     std::cerr << "Commands:\n";
-    std::cerr << "  query       <index_basename> <sparql_query> [output_format]  Execute SPARQL query\n";
+    std::cerr << "  query       <index_basename> <sparql_query> [output_format] [name]  Execute SPARQL query (optionally pin result)\n";
     std::cerr << "  query-to-file <index_basename> <sparql_query> <format> <output_file>  Execute CONSTRUCT query to file\n";
     // std::cerr << "  query-json  <json_input>                      Execute query from JSON input\n";
+    std::cerr << "  update      <index_basename> <sparql_update_query>  Execute SPARQL UPDATE query\n";
     std::cerr << "  stats       <index_basename>                  Get index statistics\n";
     std::cerr << "  build-index <json_input>                      Build index from RDF files\n";
     std::cerr << "  serialize   <index_basename> <format> [output_file]  Dump database content\n";
@@ -137,7 +138,7 @@ std::string trimAndUpper(const std::string& s) {
 }
 
 int executeQuery(const std::string& indexBasename, const std::string& queryStr, 
-                const std::string& userFormat = "") {
+                const std::string& userFormat = "", const std::string& name = "") {
     try {
         // Detect query type
         std::string type = trimAndUpper(queryStr);
@@ -189,6 +190,11 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
             result = executor.executeQuery(queryStr, format);
         }
 
+        // If a name is provided, pin the result
+        if (!name.empty()) {
+            qlever->queryAndPinResultWithName(name, queryStr);
+        }
+
         // Restore logging
         std::clog.rdbuf(clogBuf);
         std::cerr.rdbuf(cerrBuf);
@@ -198,6 +204,29 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
     } catch (const std::exception& e) {
         json errorResponse = createErrorResponse(e.what());
         std::cerr << errorResponse.dump(2) << std::endl;
+        return 1;
+    }
+}
+
+// Execute a SPARQL UPDATE query on the given index
+int executeUpdate(const std::string& indexBasename, const std::string& updateQuery) {
+    try {
+        // Load index
+        qlever::EngineConfig config;
+        config.baseName_ = indexBasename;
+        config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
+
+        auto qlever = std::make_shared<qlever::Qlever>(config);
+
+        // Run the update
+        qlever->update(updateQuery);
+
+        json response = createSuccessResponse("Update applied successfully.");
+        std::cout << response.dump() << std::endl;
+        return 0;
+    } catch (const std::exception& e) {
+        json errorResponse = createErrorResponse(e.what(), updateQuery);
+        std::cout << errorResponse.dump() << std::endl;
         return 1;
     }
 }
@@ -331,12 +360,15 @@ int main(int argc, char* argv[]) {
     }
     
     try {
-        if (command == "query" && (argc == 4 || argc == 5)) {
-            // query <index_basename> <sparql_query> [format]
-            std::string format = (argc == 5) ? argv[4] : "";
-            return executeQuery(argv[2], argv[3], format);
-        }
-        else if (command == "query-to-file" && argc == 6) {
+        if (command == "query" && (argc == 4 || argc == 5 || argc == 6)) {
+            // query <index_basename> <sparql_query> [format] [name]
+            std::string format = (argc >= 5) ? argv[4] : "";
+            std::string name = (argc == 6) ? argv[5] : "";
+            return executeQuery(argv[2], argv[3], format, name);
+        } else if (command == "update" && argc == 4) {
+            // update <index_basename> <sparql_update_query>
+            return executeUpdate(argv[2], argv[3]);
+        } else if (command == "query-to-file" && argc == 6) {
             return executeQueryToFile(argv[2], argv[3], argv[4], argv[5]);
         }
         // else if (command == "query-json" && argc == 3) {
@@ -344,15 +376,12 @@ int main(int argc, char* argv[]) {
         // }
         else if (command == "stats" && argc == 3) {
             return getIndexStats(argv[2]);
-        }
-        else if (command == "build-index" && argc == 3) {
+        } else if (command == "build-index" && argc == 3) {
             return buildIndex(argv[2]);
-        }
-        else if (command == "serialize" && (argc == 4 || argc == 5)) {
+        } else if (command == "serialize" && (argc == 4 || argc == 5)) {
             std::string outputFile = (argc == 5) ? argv[4] : "";
             return serializeDatabase(argv[2], argv[3], outputFile);
-        }
-        else {
+        } else {
             printUsage(argv[0]);
             return 1;
         }
