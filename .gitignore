@@ -49,3 +49,12 @@ sourcelist
 
 /cmake-build*
 /localIndices
+
+# Ignore RDF files in root directory
+/*.nt
+/*.nq
+/*.ttl
+/*.trig
+/*.nq.gz
+
+.DS_Store

@@ -1,0 +1,12 @@
+{
+  "index_name": "ASTRA",
+  "index_directory": "./databases",
+  "input_files": [
+    {"path": "side-load.nt", "format": "nt"},
+    {"path": "astra.nt", "format": "nt"},
+    {"path": "qcy.nt", "format": "nt"}
+  ],
+  "memory_limit_gb": 8,
+  "vocabulary_type": "on-disk-compressed-geo-split",
+  "settings_file": "./misc/configs/settings.json"
+}
