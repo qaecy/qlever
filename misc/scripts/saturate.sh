@@ -8,8 +8,6 @@ IMPLICIT_IRI=https://implicit
 
 echo "Saturating database at path: $DB_PATH"
 
-# 36554434
-
 echo "Wiping implicit graph..."
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query $DB_PATH 'DUMP GRAPH <$IMPLICIT_IRI> ; DROP GRAPH <$IMPLICIT_IRI> ;'"
 

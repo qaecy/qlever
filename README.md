@@ -112,7 +112,7 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nt /workspace/test.nt"
 
 # As NTriples -> stream to file and gzip
-docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nt /workspace/test.nt.gz"
+docker run --rm --user root -gz $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nt /workspace/test.nt.gz"
 
 # As NQuads
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain serialize ./databases/test nq"
@@ -120,6 +120,13 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 
 ### Qlever shortcomings
 - Doesn't support RDF* or RDF 1.2 yet (https://github.com/ad-freiburg/qlever/issues/2169). Won't even load an NQuads file that has RDF* in it.
+
+## Merge main repo
+```bash
+git remote add upstream https://github.com/ad-freiburg/qlever.git
+git fetch upstream
+git merge upstream/master
+```
 
 ## Build
 Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`

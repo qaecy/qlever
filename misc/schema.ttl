@@ -1,0 +1,12 @@
+@prefix : <https://dev.qaecy.com/ont#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+:CanonicalEntity rdf:type owl:Class ;
+    rdfs:subClassOf :EntityReference ;
+    owl:disjointWith :EntityMention ;
+    rdfs:comment "These are standardized representations of named entities that are the output of an enrichment step in the QAECY pipelines. The entity resolution should include relevant contextual information to distinguish between unique named entities. For example, there can be a ground floor in two buildings but they are not the same concept."@en ;
+    rdfs:label "Canonical Entity"@en ;
+    :visibleForAgent "true"^^xsd:boolean .
