@@ -250,7 +250,12 @@ CPP_template(typename V, typename F)(
 
     void operator++(int) { ++(*this); }
 
-    bool operator==(ql::ranges::sentinel_t<V> s) const { return current_ == s; }
+    using Sent = ranges::sentinel_t<V>;
+    bool operator==(Sent s) const { return current_ == s; }
+    bool operator!=(Sent s) const { return current_ != s; }
+
+    friend bool operator==(Sent s, Iterator i) { return i.current_ == s; }
+    friend bool operator!=(Sent s, Iterator i) { return i.current_ != s; }
   };
 
  public:
@@ -278,7 +283,7 @@ CallbackOnEndView(R&&, F) -> CallbackOnEndView<all_t<R>, F>;
 // A drop-in replacement for `std::views::as_rvalue` from C++23.
 // It yields the same elements as the underlying range, but casts them to
 // rvalue references via `std::move`. It is implemented via
-// `std::make_move_iterator`.
+// `ql::make_move_iterator`.
 CPP_template(typename UnderlyingRange)(
     requires ql::ranges::view<UnderlyingRange> CPP_and
         ql::ranges::input_range<UnderlyingRange>) class RvalueView
@@ -318,11 +323,11 @@ CPP_template(typename UnderlyingRange)(
   // Note: We currently don't implement the const `begin` and `end` functions,
   // but they can be added should they ever become necessary.
   constexpr auto begin() {
-    return std::make_move_iterator(ql::ranges::begin(underlyingRange_));
+    return ql::make_move_iterator(ql::ranges::begin(underlyingRange_));
   }
   constexpr auto end() {
     if constexpr (ql::ranges::common_range<UnderlyingRange>) {
-      return std::move_iterator{ql::ranges::end(underlyingRange_)};
+      return ql::move_iterator{ql::ranges::end(underlyingRange_)};
     } else {
       return ql::move_sentinel(ql::ranges::end(underlyingRange_));
     }
@@ -391,6 +396,8 @@ CPP_template(typename V)(requires ql::ranges::view<V> CPP_and
     DISABLE_WARNINGS_GCC_TEMPLATE_FRIEND
     friend bool operator==(const Iterator& it, const Sentinel& s);
     friend bool operator!=(const Iterator& it, const Sentinel& s);
+    friend bool operator==(const Sentinel& s, const Iterator& it);
+    friend bool operator!=(const Sentinel& s, const Iterator& it);
     GCC_REENABLE_WARNINGS
   };
 
@@ -408,6 +415,13 @@ CPP_template(typename V)(requires ql::ranges::view<V> CPP_and
 
     friend bool operator!=(const Iterator& it, const Sentinel& s) {
       return !(it == s);
+    }
+
+    friend bool operator==(const Sentinel& s, const Iterator& it) {
+      return it == s;
+    }
+    friend bool operator!=(const Sentinel& s, const Iterator& it) {
+      return it != s;
     }
   };
 
