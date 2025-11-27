@@ -92,45 +92,49 @@ json IndexBuilder::buildIndex(const json& jsonInput) {
 
 std::string IndexBuilder::processInputFiles(const json& inputFiles, qlever::IndexBuilderConfig& config) {
     for (const auto& inputFile : inputFiles) {
-        std::string filepath;
-        qlever::Filetype filetype = qlever::Filetype::Turtle; // default
+        qlever::InputFileSpecification spec;
+        spec.filetype_ = qlever::Filetype::Turtle; // default
 
         if (inputFile.is_string()) {
-            filepath = inputFile.get<std::string>();
+            spec.filename_ = inputFile.get<std::string>();
         } else if (inputFile.is_object()) {
             if (!inputFile.contains("path") || !inputFile["path"].is_string()) {
                 return "Input file object must contain 'path' string";
             }
-            filepath = inputFile["path"];
+            spec.filename_ = inputFile["path"];
 
             // Optional format specification
             if (inputFile.contains("format") && inputFile["format"].is_string()) {
                 std::string format = inputFile["format"];
                 if (format == "ttl" || format == "turtle") {
-                    filetype = qlever::Filetype::Turtle;
+                    spec.filetype_ = qlever::Filetype::Turtle;
                 } else if (format == "nt") {
-                    filetype = qlever::Filetype::Turtle; // NT is parsed as Turtle
+                    spec.filetype_ = qlever::Filetype::Turtle; // NT is parsed as Turtle
                 } else if (format == "nq") {
-                    filetype = qlever::Filetype::NQuad;
+                    spec.filetype_ = qlever::Filetype::NQuad;
                 } else {
-                    return "Unsupported format: " + format + ". Use 'nt' or 'nq'";
+                    return "Unsupported format: " + format + ". Use 'ttl', 'nt', or 'nq'";
                 }
+            }
+
+            if (inputFile.contains("default_graph") && inputFile["default_graph"].is_string()) {
+                spec.defaultGraph_ = inputFile["default_graph"].get<std::string>();
             }
         } else {
             return "Input file must be a string path or object with 'path' property";
         }
 
         // Allow '-' or '/dev/stdin' for stdin, skip file existence check in that case
-        if (filepath != "-" && filepath != "/dev/stdin") {
-            if (!std::filesystem::exists(filepath)) {
-                return "Input file does not exist: " + filepath;
+        if (spec.filename_ != "-" && spec.filename_ != "/dev/stdin") {
+            if (!std::filesystem::exists(spec.filename_)) {
+                return "Input file does not exist: " + spec.filename_;
             }
         }
 
 
         // If filepath is '-', leave as is. Downstream code should detect '-' and use std::cin directly.
 
-        config.inputFiles_.emplace_back(filepath, filetype);
+        config.inputFiles_.push_back(spec);
     }
     return ""; // Success
 }

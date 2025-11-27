@@ -1,0 +1,9 @@
+{
+  "index_name": "schema-ttl-named",
+  "index_directory": "./databases",
+  "input_files": [
+    {"path": "misc/schema.ttl", "format": "ttl", "default_graph": "https://dev.qaecy.com/ont"}
+  ],
+  "memory_limit_gb": 2,
+  "vocabulary_type": "on-disk-compressed"
+}
