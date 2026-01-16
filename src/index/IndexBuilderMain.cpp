@@ -15,9 +15,9 @@
 #include <string>
 
 #include "CompilationInfo.h"
+#include "QleverCliContext.h"
 #include "global/Constants.h"
 #include "index/ConstantsIndexBuilding.h"
-#include "libqlever/Qlever.h"
 #include "util/ProgramOptionsHelpers.h"
 #include "util/ReadableNumberFacet.h"
 
@@ -274,8 +274,8 @@ int main(int argc, char** argv) {
   try {
     config.inputFiles_ = getFileSpecifications(filetype, inputFile,
                                                defaultGraphs, parseParallel);
-    config.validate();
-    qlever::Qlever::buildIndex(config);
+    qlever::QleverCliContext::validateConfig(config);
+    qlever::QleverCliContext::buildIndex(config);
 
   } catch (std::exception& e) {
     AD_LOG_ERROR << "Creating the index for QLever failed with the following "
