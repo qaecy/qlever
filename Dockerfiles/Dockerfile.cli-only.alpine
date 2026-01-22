@@ -30,14 +30,15 @@ COPY src /qlever/src/
 COPY test /qlever/test/
 COPY benchmark /qlever/benchmark/
 COPY CMakeLists.txt /qlever/
+COPY GitVersion.cmake /qlever/
 COPY CompilationInfo.cmake /qlever/
 
 # Build essential QLever binaries
+# Build essential QLever binaries
 WORKDIR /qlever/build/
-RUN sed -i 's/qlever_target_link_libraries(QleverCliMain parser engine util index qlever cliUtils absl::strings)/qlever_target_link_libraries(QleverCliMain parser engine util index cliUtils absl::strings)/' ../CMakeLists.txt && \
-    sed -i 's/qlever_target_link_libraries(IndexBuilderMain qlever index/qlever_target_link_libraries(IndexBuilderMain index/' ../CMakeLists.txt && \
+RUN sed -i 's/qlever_target_link_libraries(qlever-index qlever index/qlever_target_link_libraries(qlever-index index/' ../CMakeLists.txt && \
     cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" -GNinja ..
-RUN cmake --build . --target QleverCliMain IndexBuilderMain
+RUN cmake --build . --target qlever-cli qlever-index
 
 # Runtime stage - very minimal Alpine
 FROM alpine:3.22 AS runtime
@@ -58,10 +59,10 @@ RUN apk add --no-cache \
     boost-url
 
 # Copy the required binaries
-COPY --from=builder /qlever/build/QleverCliMain /qlever/QleverCliMain
-COPY --from=builder /qlever/build/IndexBuilderMain /qlever/IndexBuilderMain
+COPY --from=builder /qlever/build/qlever-cli /qlever/qlever-cli
+COPY --from=builder /qlever/build/qlever-index /qlever/qlever-index
 
-RUN chmod +x /qlever/QleverCliMain /qlever/IndexBuilderMain
+RUN chmod +x /qlever/qlever-cli /qlever/qlever-index
 
 # Direct entrypoint to our CLI
-ENTRYPOINT ["/qlever/QleverCliMain"]
+ENTRYPOINT ["/qlever/qlever-cli"]
