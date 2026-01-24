@@ -6,5 +6,7 @@
   ],
   "memory_limit_gb": 6,
   "vocabulary_type": "on-disk-compressed-geo-split",
-  "settings_file": "./misc/configs/settings.json"
+  "settings_file": "./misc/configs/settings.json",
+  "text_index": "from_literals",
+  "text_literals_predicates": ["qcy:value", "qcy:textSummary", "qcy:tag", "qcy:subject"]
 }

@@ -207,19 +207,36 @@ class QleverCliContext {
     }
 
     if (config.wordsAndDocsFileSpecified() || config.addWordsFromLiterals_) {
-#ifndef QLEVER_REDUCED_FEATURE_SET_FOR_CPP17
-      auto textIndexBuilder = TextIndexBuilder(
-          ad_utility::makeUnlimitedAllocator<Id>(), index.getOnDiskBase());
-      textIndexBuilder.buildTextIndexFile(
-          config.wordsAndDocsFileSpecified()
-              ? std::optional{std::pair{config.wordsfile_, config.docsfile_}}
-              : std::nullopt,
-          config.addWordsFromLiterals_, config.textScoringMetric_,
-          {config.bScoringParam_, config.kScoringParam_});
-      if (!config.docsfile_.empty()) {
-        textIndexBuilder.buildDocsDB(config.docsfile_);
+ #ifndef QLEVER_REDUCED_FEATURE_SET_FOR_CPP17
+      // Only skip if the words file is missing or empty
+      bool skipTextIndex = false;
+      if (!config.wordsfile_.empty()) {
+        if (!std::filesystem::exists(config.wordsfile_)) {
+          std::cerr << "[QLever] Warning: Words file '" << config.wordsfile_ << "' does not exist. Skipping text index build." << std::endl;
+          skipTextIndex = true;
+        } else {
+          std::error_code ec;
+          auto fileSize = std::filesystem::file_size(config.wordsfile_, ec);
+          if (ec || fileSize == 0) {
+            std::cerr << "[QLever] Warning: Words file '" << config.wordsfile_ << "' is empty. Skipping text index build." << std::endl;
+            skipTextIndex = true;
+          }
+        }
       }
-#endif
+      if (!skipTextIndex) {
+        auto textIndexBuilder = TextIndexBuilder(
+            ad_utility::makeUnlimitedAllocator<Id>(), index.getOnDiskBase());
+        textIndexBuilder.buildTextIndexFile(
+            config.wordsAndDocsFileSpecified()
+                ? std::optional{std::pair{config.wordsfile_, config.docsfile_}}
+                : std::nullopt,
+            config.addWordsFromLiterals_, config.textScoringMetric_,
+            {config.bScoringParam_, config.kScoringParam_});
+        if (!config.docsfile_.empty()) {
+          textIndexBuilder.buildDocsDB(config.docsfile_);
+        }
+      }
+ #endif
     }
   }
 };

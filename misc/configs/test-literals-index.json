@@ -1,0 +1,22 @@
+{
+    "index_name": "xx",
+    "index_directory": "./databases",
+    "input_files": [
+        {
+            "path": "misc/test-literals.nq",
+            "format": "nq"
+        }
+    ],
+    "memory_limit_gb": 6,
+    "vocabulary_type": "on-disk-compressed-geo-split",
+    "settings_file": "./misc/configs/settings.json",
+    "text_index": "from_literals",
+    "text_literals_predicates": [
+        "<http://example.org/textSummary>",
+        "<http://example.org/value>",
+        "<http://example.org/subject>",
+        "<http://example.org/tag>"
+    ],
+    "clean_docsfile": true,
+    "clean_wordsfile": true
+}

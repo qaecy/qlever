@@ -1,5 +1,0 @@
-{
-  "indexBasename": "databases/test",
-  "query": "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10",
-  "format": "sparql-json"
-}

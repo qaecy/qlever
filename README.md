@@ -9,7 +9,23 @@ The CLI tool binary is built inside a Docker container for compatibility reasons
 The qlever CLI is what is added in this repo and it makes querying and serializing the index possible through a CLI + offers a more convenient way build the index. To see the available commands, run `docker run --rm qlever-cli:alpine --help`
 
 ### Build index
+
 The index configuration is described in a JSON file that looks like the one you find in `misc/configs/build-test-index.json`. This config loads the very small nquads file `misc/test-simple.nq` (`test.nq contains RDF* and will currently fail`).
+
+#### Cleaning docsfile automatically
+You can add a boolean option `"clean_docsfile": true` to your index build JSON config. If enabled, the docsfile generated from text predicates will be automatically cleaned to remove malformed or empty lines before being used for the text index. The cleaned file will have the suffix `.cleaned` and will be used for index building.
+
+Example config snippet:
+```json
+{
+  "index_name": "test",
+  "input_files": ["misc/test-simple.nq"],
+  "text_literals_predicates": ["qcy:mentions"],
+  "clean_docsfile": true
+}
+```
+
+This avoids manual cleaning and ensures the text index build uses only valid lines.
 
 An important setting is the vocabulary type. Here are the 5 available types:
 - in-memory-uncompressed
@@ -33,9 +49,9 @@ You can build an index directly from a gzipped RDF file by unzipping and piping 
 
 ```bash
 # Example: Build index from a gzipped NTriples file using stdin
-gunzip -c misc/test-simple.nt.gz | \
+gunzip -c /Users/mads/Downloads/latest.nq.gz | \
   docker run --rm --user root -i -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine \
-  sh -c "/qlever/qlever-cli build-index \"\$(cat misc/configs/build-test-index-stdin.json)\""
+  sh -c "/qlever/qlever-cli build-index \"\$(cat misc/configs/stdin.json)\""
 ```
 
 This will read the uncompressed RDF data from stdin and build the index as usual.
@@ -289,4 +305,13 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 # ~92,350 triples/s
 
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli query ./databases/NEST 'SELECT (COUNT(*) AS ?count) WHERE { { ?s ?p ?o } UNION { GRAPH ?g {?s ?p ?o} } }'"
+```
+
+## Text queries
+```bash
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli query ./databases/xx 'PREFIX ql: <http://www.badw.de/examples/qlever#> PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT ?s ?text WHERE { ?s a qcy:FileContent . } LIMIT 5'"
+
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli query ./databases/xx 'PREFIX ql: <http://www.badw.de/examples/qlever#> PREFIX qcy: <https://dev.qaecy.com/ont#> SELECT ?s ?text WHERE { ?s a qcy:FileContent . ?text ql:contains-word "brücke" . ?text ql:contains-entity ?s . } TEXTLIMIT 5'"
+
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli query ./databases/xx 'SELECT ?text WHERE{ ?text ql:contains-word "brücke\*" . } TEXTLIMIT 5'"
 ```

@@ -1,0 +1,14 @@
+# SPOG, object = IRI
+<http://example.org/subject1> <http://example.org/predicate1> <http://example.org/object1> <http://example.org/graph1> .
+# SPOG, object = String
+<http://example.org/subject1> <http://example.org/predicate2> "hello" <http://example.org/graph2> .
+# SPOG, object = Float
+<http://example.org/subject1> <http://example.org/predicate3> "22.3"^^<http://www.w3.org/2001/XMLSchema#float>  <http://example.org/graph3> .
+# SPO, object = IRI
+<http://example.org/subject1> <http://example.org/predicate5> <http://example.org/object5> .
+# SPO, object = String (for text index)
+<http://example.org/subject2> <http://example.org/textSummary> "This is a floor plan for the ground floor." .
+<http://example.org/subject3> <http://example.org/textSummary> "The first floor contains offices and meeting rooms." .
+<http://example.org/subject4> <http://example.org/value> "Window001" .
+<http://example.org/subject5> <http://example.org/subject> "Main entrance" .
+<http://example.org/subject6> <http://example.org/tag> "Lobby" .

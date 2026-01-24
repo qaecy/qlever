@@ -1,0 +1,13 @@
+{
+    "index_name": "db",
+    "index_directory": "./databases",
+    "input_files": [
+        {
+            "path": "-",
+            "format": "nq"
+        }
+    ],
+    "memory_limit_gb": 6,
+    "vocabulary_type": "on-disk-compressed-geo-split",
+    "settings_file": "./misc/configs/settings.json"
+}

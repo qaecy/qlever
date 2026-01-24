@@ -2,8 +2,12 @@
   "index_name": "test",
   "index_directory": "./databases",
   "input_files": [
-    {"path": "misc/test-simple.nq", "format": "nq"}
+    {
+      "path": "misc/test-simple.nq",
+      "format": "nq"
+    }
   ],
   "memory_limit_gb": 2,
-  "vocabulary_type": "on-disk-compressed"
+  "vocabulary_type": "on-disk-compressed",
+  "clean_docsfile": true
 }

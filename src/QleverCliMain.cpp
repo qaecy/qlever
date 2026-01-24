@@ -211,6 +211,11 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
     config.baseName_ = indexBasename;
     config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
 
+    // Automatically load text index if it exists
+    if (std::filesystem::exists(indexBasename + ".text.index")) {
+      config.loadTextIndex_ = true;
+    }
+
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::QueryExecutor executor(qlever);
     std::string result;

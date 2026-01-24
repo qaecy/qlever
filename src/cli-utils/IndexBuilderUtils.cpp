@@ -2,13 +2,131 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
 
-#include "../index/vocabulary/VocabularyType.h"
 #include "QleverCliContext.h"
+#include "index/DeltaTriples.h"
+#include "index/Index.h"
+#include "index/IndexImpl.h"
+#include "index/Permutation.h"
+#include "index/ScanSpecification.h"
+#include "index/vocabulary/VocabularyType.h"
+#include "libqlever/Qlever.h"
+#include "util/AllocatorWithLimit.h"
+#include "util/CancellationHandle.h"
+#include "util/json.h"
 
 using json = nlohmann::json;
 
 namespace cli_utils {
+
+/**
+ * @brief Extract literals from specified predicates and save them to a words
+ * file
+ */
+static void extractLiteralsFromPredicates(
+    const std::string& baseName, const std::vector<std::string>& predicates,
+    const std::string& wordsfile, const std::string& docsfile) {
+  auto allocator = ad_utility::makeUnlimitedAllocator<Id>();
+  Index index{allocator};
+  index.usePatterns() = false;
+  index.createFromOnDiskIndex(baseName, false);
+
+  std::ofstream outWords(wordsfile);
+  std::ofstream outDocs(docsfile);
+  uint64_t contextId = 0;
+
+  // Create a valid cancellation handle for the scan operations
+  auto cancellationHandle =
+      std::make_shared<ad_utility::CancellationHandle<>>();
+
+  const auto& pso = index.getImpl().getPermutation(Permutation::Enum::PSO);
+
+  for (auto predName : predicates) {
+    VocabIndex predIdx;
+    bool found = index.getVocab().getId(predName, &predIdx);
+
+    // If not found and it looks like an IRI without brackets, try adding them
+    if (!found && !predName.empty() && predName[0] != '<' &&
+        predName.find(':') != std::string::npos) {
+      std::string wrapped = "<" + predName + ">";
+      found = index.getVocab().getId(wrapped, &predIdx);
+      if (found) predName = wrapped;
+    }
+
+    if (!found) {
+      std::cerr << "[QLever] Warning: Predicate '" << predName
+                << "' not found in vocabulary. Skipping." << std::endl;
+      continue;
+    }
+
+    std::cerr << "[QLever] Extracting literals for predicate: " << predName
+              << std::endl;
+
+    Id predId = Id::makeFromVocabIndex(predIdx);
+    ScanSpecification scanSpec{predId, std::nullopt, std::nullopt};
+
+    // Use the actual state from the index instead of a dummy one to avoid
+    // "originalMetadata_.has_value()" assertion errors.
+    auto state =
+        index.deltaTriplesManager().getCurrentLocatedTriplesSharedState();
+    auto scanSpecAndBlocks = pso.getScanSpecAndBlocks(scanSpec, *state);
+    auto results = pso.scan(scanSpecAndBlocks, {}, cancellationHandle, *state);
+
+    size_t count = 0;
+    for (size_t i = 0; i < results.numRows(); ++i) {
+      Id subjId = results(i, 0);
+      Id objId = results(i, 1);
+
+      // We only care about literals
+      if (objId.getDatatype() == Datatype::VocabIndex ||
+          objId.getDatatype() == Datatype::LocalVocabIndex) {
+        auto literal =
+            (objId.getDatatype() == Datatype::VocabIndex)
+                ? index.getImpl().indexToString(objId.getVocabIndex())
+                : "LOCAL_VOCAB_NOT_SUPPORTED_YET";  // Text indexer needs
+                                                    // strings
+
+        auto subject = index.getImpl().indexToString(subjId.getVocabIndex());
+
+        // wordsfile format: word \t contextId \t score [\t isEntity]
+        // docsfile format: contextId \t text
+        // We strip quotes from literals if they exist
+        std::string literalStr = std::string(literal);
+        // Only strip quotes if the string starts and ends with a quote and is at least 2 chars
+        if (literalStr.size() >= 2 && literalStr.front() == '"' && literalStr.back() == '"') {
+          literalStr = literalStr.substr(1, literalStr.size() - 2);
+        }
+
+        // Skip empty literals
+        if (literalStr.empty()) {
+          continue;
+        }
+
+        // Strip angle brackets from subject IRI
+        std::string subjectStr = std::string(subject);
+        if (subjectStr.size() >= 2 && subjectStr.front() == '<' &&
+            subjectStr.back() == '>') {
+          subjectStr = subjectStr.substr(1, subjectStr.size() - 2);
+        }
+
+        // Skip if subject is empty after stripping
+        if (subjectStr.empty()) {
+          continue;
+        }
+
+        outWords << literalStr << "\t" << contextId << "\t1.0\n";
+        outWords << subjectStr << "\t" << contextId << "\t1.0\t1\n";
+        outDocs << contextId << "\t" << literalStr << "\n";
+        contextId++;
+        count++;
+      }
+    }
+    std::cerr << "[QLever] Extracted " << count << " literals for " << predName
+              << std::endl;
+  }
+}
 
 json IndexBuilder::buildIndex(const json& jsonInput) {
   try {
@@ -55,11 +173,79 @@ json IndexBuilder::buildIndex(const json& jsonInput) {
       return createErrorResponse(inputFilesError);
     }
 
-    // Process optional parameters
+    // Process optional parameters and collect text predicates
+    std::vector<std::string> textPredicates;
     std::string optionalParamsError =
-        processOptionalParameters(jsonInput, config);
+        processOptionalParameters(jsonInput, config, textPredicates);
     if (!optionalParamsError.empty()) {
       return createErrorResponse(optionalParamsError);
+    }
+
+    // If text_literals_predicates is set, extract literals and generate a wordsfile
+
+    if (!textPredicates.empty()) {
+      std::string wordsfilePath = fullIndexPath + ".predicates.wordsfile";
+      std::string docsfilePath = fullIndexPath + ".predicates.docsfile";
+      extractLiteralsFromPredicates(fullIndexPath, textPredicates, wordsfilePath, docsfilePath);
+
+      // Clean wordsfile if requested
+      bool cleanWordsfile = false;
+      if (jsonInput.contains("clean_wordsfile") && jsonInput["clean_wordsfile"].is_boolean()) {
+        cleanWordsfile = jsonInput["clean_wordsfile"].get<bool>();
+      }
+      if (cleanWordsfile) {
+        std::string cleanedWordsfile = wordsfilePath + ".cleaned";
+        std::ifstream in(wordsfilePath);
+        std::ofstream out(cleanedWordsfile);
+        std::string line;
+        size_t valid = 0, invalid = 0;
+        while (std::getline(in, line)) {
+          // Clean logic: require at least 3 tab-separated fields
+          size_t tab1 = line.find('\t');
+          size_t tab2 = (tab1 != std::string::npos) ? line.find('\t', tab1 + 1) : std::string::npos;
+          if (!line.empty() && tab1 != std::string::npos && tab2 != std::string::npos) {
+            out << line << "\n";
+            ++valid;
+          } else {
+            ++invalid;
+          }
+        }
+        in.close();
+        out.close();
+        config.wordsfile_ = cleanedWordsfile;
+        std::cerr << "[QLever] Wordsfile cleaned: " << valid << " valid, " << invalid << " invalid lines. Using cleaned file: " << cleanedWordsfile << std::endl;
+      } else {
+        config.wordsfile_ = wordsfilePath;
+      }
+
+      // Clean docsfile if requested
+      bool cleanDocsfile = false;
+      if (jsonInput.contains("clean_docsfile") && jsonInput["clean_docsfile"].is_boolean()) {
+        cleanDocsfile = jsonInput["clean_docsfile"].get<bool>();
+      }
+      if (cleanDocsfile) {
+        std::string cleanedDocsfile = docsfilePath + ".cleaned";
+        std::ifstream in(docsfilePath);
+        std::ofstream out(cleanedDocsfile);
+        std::string line;
+        size_t valid = 0, invalid = 0;
+        while (std::getline(in, line)) {
+          // Clean logic: skip empty lines and lines not containing a tab
+          if (!line.empty() && line.find('\t') != std::string::npos) {
+            out << line << "\n";
+            ++valid;
+          } else {
+            ++invalid;
+          }
+        }
+        in.close();
+        out.close();
+        config.docsfile_ = cleanedDocsfile;
+        std::cerr << "[QLever] Docsfile cleaned: " << valid << " valid, " << invalid << " invalid lines. Using cleaned file: " << cleanedDocsfile << std::endl;
+      } else {
+        config.docsfile_ = docsfilePath;
+      }
+      config.addWordsFromLiterals_ = false; // Only use the extracted predicates
     }
 
     // Validate and build index
@@ -156,7 +342,8 @@ std::string IndexBuilder::processInputFiles(
 }
 
 std::string IndexBuilder::processOptionalParameters(
-    const json& input, qlever::IndexBuilderConfig& config) {
+    const json& input, qlever::IndexBuilderConfig& config,
+    std::vector<std::string>& textPredicates) {
   // Memory limit
   if (input.contains("memory_limit_gb") &&
       input["memory_limit_gb"].is_number()) {
@@ -201,6 +388,24 @@ std::string IndexBuilder::processOptionalParameters(
   if (input.contains("add_words_from_literals") &&
       input["add_words_from_literals"].is_boolean()) {
     config.addWordsFromLiterals_ = input["add_words_from_literals"].get<bool>();
+  }
+
+  // Alternative way to specify text index (following Qleverfile syntax)
+  if (input.contains("text_index") && input["text_index"].is_string()) {
+    if (input["text_index"].get<std::string>() == "from_literals") {
+      config.addWordsFromLiterals_ = true;
+    }
+  }
+
+  // Predicates for text index from literals
+  if (input.contains("text_literals_predicates") &&
+      input["text_literals_predicates"].is_array()) {
+    textPredicates.clear();
+    for (const auto& predicate : input["text_literals_predicates"]) {
+      if (predicate.is_string()) {
+        textPredicates.push_back(predicate.get<std::string>());
+      }
+    }
   }
 
   // Prefixes for ID-encoded IRIs

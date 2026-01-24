@@ -53,7 +53,8 @@ class IndexBuilder {
    * @return Error message if validation fails, empty string if successful
    */
   static std::string processOptionalParameters(
-      const nlohmann::json& input, qlever::IndexBuilderConfig& config);
+      const nlohmann::json& input, qlever::IndexBuilderConfig& config,
+      std::vector<std::string>& textPredicates);
 
   /**
    * @brief Create error response JSON
