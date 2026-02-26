@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
   bool noPatterns;
   bool onlyPsoAndPosPermutations;
   bool persistUpdates;
+  std::vector<std::string> preloadMaterializedViews;
 
   ad_utility::MemorySize memoryMaxSize;
 
@@ -176,6 +177,16 @@ int main(int argc, char** argv) {
           &RuntimeParameters::materializedViewWriterMemory_>(),
       "Memory limit for sorting rows during the writing of materialized "
       "views.");
+  add("preload-materialized-views,l",
+      po::value<std::vector<std::string>>(&preloadMaterializedViews)
+          ->multitoken(),
+      "The names of materialized views to be loaded automatically on server "
+      "start (this option takes an arbitrary number of arguments).");
+  add("enable-materialized-view-query-rewrite",
+      optionFactory.getProgramOption<
+          &RuntimeParameters::enableMaterializedViewQueryRewrite_>(),
+      "If set to true, loaded materialized views will be considered as "
+      "alternative query plans for certain supported query patterns.");
   po::variables_map optionsMap;
 
   try {
@@ -203,7 +214,7 @@ int main(int argc, char** argv) {
     Server server(port, numSimultaneousQueries, memoryMaxSize,
                   std::move(accessToken), noAccessCheck, !noPatterns);
     server.run(indexBasename, text, !noPatterns, !onlyPsoAndPosPermutations,
-               persistUpdates);
+               persistUpdates, preloadMaterializedViews);
   } catch (const std::exception& e) {
     // This code should never be reached as all exceptions should be handled
     // within server.run()

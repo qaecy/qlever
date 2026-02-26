@@ -1,7 +1,0 @@
-{
-  "input_files": [
-    {"path": "-", "format": "nt"}
-  ],
-  "index_name": "test-stdin",
-  "index_directory": "./databases"
-}

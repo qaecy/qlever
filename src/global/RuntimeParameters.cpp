@@ -51,6 +51,8 @@ RuntimeParameters::RuntimeParameters() {
   add(materializedViewWriterMemory_);
   add(defaultQueryTimeout_);
   add(sortInMemoryThreshold_);
+  add(prefilteredOptionalJoin_);
+  add(enableMaterializedViewQueryRewrite_);
 
   defaultQueryTimeout_.setParameterConstraint(
       [](std::chrono::seconds value, std::string_view parameterName) {

@@ -155,17 +155,147 @@ void printUsage(const char* programName) {
       << "  on-disk-compressed-geo-split - Required for GeoSPARQL support\n";
 }
 
-// Helper to trim and uppercase a string (for query type detection)
+// Helper functions for PREFIX handling workaround
 #include <algorithm>
 #include <cctype>
-std::string trimAndUpper(const std::string& s) {
-  auto start = s.find_first_not_of(" \t\n\r");
-  if (start == std::string::npos) return "";
-  auto end = s.find_first_of(" \t\n\r", start);
-  std::string firstWord = s.substr(start, end - start);
-  std::transform(firstWord.begin(), firstWord.end(), firstWord.begin(),
-                 ::toupper);
-  return firstWord;
+#include <map>
+#include <regex>
+#include <sstream>
+
+// Parse PREFIX declarations and build a map of prefix -> IRI
+std::map<std::string, std::string> parsePrefixes(const std::string& query) {
+  std::map<std::string, std::string> prefixes;
+  std::istringstream stream(query);
+  std::string line;
+
+  while (std::getline(stream, line)) {
+    // Trim leading whitespace
+    size_t start = line.find_first_not_of(" \t");
+    if (start == std::string::npos) continue;
+
+    std::string trimmed = line.substr(start);
+
+    // Check if line starts with PREFIX (case-insensitive)
+    if (trimmed.length() >= 6) {
+      std::string prefix_keyword = trimmed.substr(0, 6);
+      std::transform(prefix_keyword.begin(), prefix_keyword.end(),
+                     prefix_keyword.begin(), ::toupper);
+
+      if (prefix_keyword == "PREFIX") {
+        // Extract prefix name and IRI
+        // Format: PREFIX name: <iri>
+        size_t colonPos = trimmed.find(':', 6);
+        size_t iriStart = trimmed.find('<', colonPos);
+        size_t iriEnd = trimmed.find('>', iriStart);
+
+        if (colonPos != std::string::npos && iriStart != std::string::npos &&
+            iriEnd != std::string::npos) {
+          // Extract prefix name (between PREFIX and :)
+          std::string prefixName = trimmed.substr(6, colonPos - 6);
+          // Trim whitespace
+          prefixName.erase(0, prefixName.find_first_not_of(" \t"));
+          prefixName.erase(prefixName.find_last_not_of(" \t") + 1);
+
+          // Extract IRI (between < and >)
+          std::string iri = trimmed.substr(iriStart + 1, iriEnd - iriStart - 1);
+
+          prefixes[prefixName] = iri;
+        }
+      }
+    }
+  }
+
+  return prefixes;
+}
+
+// Expand prefixed terms in a query using the prefix map
+std::string expandPrefixedTerms(
+    const std::string& query,
+    const std::map<std::string, std::string>& prefixes) {
+  std::string result = query;
+
+  // For each prefix, replace all occurrences of prefix:localPart with
+  // <iri/localPart>
+  for (const auto& [prefix, iri] : prefixes) {
+    // Match prefix:word (where word is alphanumeric or underscore)
+    // Use negative lookbehind to avoid matching inside IRIs
+    std::string pattern = prefix + ":([a-zA-Z0-9_-]+)";
+    std::regex prefixRegex(pattern);
+
+    std::string replacement = "<" + iri + "$1>";
+    result = std::regex_replace(result, prefixRegex, replacement);
+  }
+
+  return result;
+}
+
+// Strip PREFIX declarations from a query
+std::string stripPrefixDeclarations(const std::string& query) {
+  std::istringstream stream(query);
+  std::ostringstream result;
+  std::string line;
+
+  while (std::getline(stream, line)) {
+    // Trim and check if line starts with PREFIX
+    size_t start = line.find_first_not_of(" \t");
+    if (start != std::string::npos) {
+      std::string trimmed = line.substr(start);
+      if (trimmed.length() >= 6) {
+        std::string prefix_keyword = trimmed.substr(0, 6);
+        std::transform(prefix_keyword.begin(), prefix_keyword.end(),
+                       prefix_keyword.begin(), ::toupper);
+
+        if (prefix_keyword == "PREFIX") {
+          // Skip this line
+          continue;
+        }
+      }
+    }
+
+    result << line << "\n";
+  }
+
+  return result.str();
+}
+
+// Complete PREFIX workaround: parse, expand, and strip
+std::string stripPrefixesAndExpand(const std::string& query) {
+  // 1. Parse PREFIX declarations
+  auto prefixes = parsePrefixes(query);
+
+  // 2. Expand prefixed terms
+  std::string expanded = expandPrefixedTerms(query, prefixes);
+
+  // 3. Strip PREFIX declarations
+  std::string cleaned = stripPrefixDeclarations(expanded);
+
+  return cleaned;
+}
+
+// Helper to detect query type, skipping PREFIX declarations
+std::string detectQueryType(const std::string& query) {
+  std::istringstream stream(query);
+  std::string word;
+
+  while (stream >> word) {
+    // Convert to uppercase for comparison
+    std::string upperWord = word;
+    std::transform(upperWord.begin(), upperWord.end(), upperWord.begin(),
+                   ::toupper);
+
+    // Skip PREFIX declarations
+    if (upperWord == "PREFIX") {
+      // Skip the rest of this PREFIX line (prefix name and IRI)
+      std::string restOfLine;
+      std::getline(stream, restOfLine);
+      continue;
+    }
+
+    // Return first non-PREFIX keyword (SELECT, CONSTRUCT, DESCRIBE, etc.)
+    return upperWord;
+  }
+
+  return "";
 }
 
 int executeQuery(const std::string& indexBasename, const std::string& queryStr,
@@ -173,7 +303,7 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
                  const std::string& name = "") {
   try {
     // Detect query type
-    std::string type = trimAndUpper(queryStr);
+    std::string type = detectQueryType(queryStr);
     std::string format = userFormat;
     // Set default format if not overridden
     if (format.empty()) {
@@ -216,9 +346,21 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
     std::string result;
 
     if (type == "CONSTRUCT" || type == "DESCRIBE") {
+      // Workaround for QLever PREFIX bug: strip PREFIX declarations and expand
+      // prefixed terms before execution
+
+      // Debug: log before processing (to stdout, since stderr is redirected)
+      std::cout << "DEBUG: About to process query" << std::endl;
+
+      std::string processedQuery = stripPrefixesAndExpand(queryStr);
+
+      // Debug: log the processed query to stdout
+      std::cout << "DEBUG: Original query:\n" << queryStr << std::endl;
+      std::cout << "DEBUG: Processed query:\n" << processedQuery << std::endl;
+
       // For CONSTRUCT and DESCRIBE, use the construct executor
       // (no file output, just return as string)
-      result = executor.executeConstructQueryToString(queryStr, format);
+      result = executor.executeConstructQueryToString(processedQuery, format);
     } else {
       // For SELECT, ASK, use the standard executor
       result = executor.executeQuery(queryStr, format);
@@ -355,9 +497,13 @@ int executeQueryToFile(const std::string& indexBasename,
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::QueryExecutor executor(qlever);
 
+    // Workaround for QLever PREFIX bug: strip PREFIX declarations and expand
+    // prefixed terms before execution
+    std::string processedQuery = stripPrefixesAndExpand(queryStr);
+
     // Execute query to file
     ad_utility::Timer timer{ad_utility::Timer::Started};
-    executor.executeConstructQuery(queryStr, format, outputFile);
+    executor.executeConstructQuery(processedQuery, format, outputFile);
     auto executionTime = timer.msecs().count();
 
     // Create success response
@@ -387,6 +533,15 @@ int executeQueryToFile(const std::string& indexBasename,
 }
 
 int main(int argc, char* argv[]) {
+  // DEBUG: Very early output to confirm execution
+  std::cout << "DEBUG: main() called with " << argc << " arguments"
+            << std::endl;
+  std::cout << "DEBUG: command line: ";
+  for (int i = 0; i < argc; ++i) {
+    std::cout << argv[i] << " ";
+  }
+  std::cout << std::endl;
+
   // Redirect QLever logging to stderr so only JSON goes to stdout
   ad_utility::setGlobalLoggingStream(&std::cerr);
 
@@ -396,6 +551,7 @@ int main(int argc, char* argv[]) {
   }
 
   std::string command = argv[1];
+  std::cout << "DEBUG: command = " << command << std::endl;
 
   // Handle help flags
   if (command == "--help" || command == "-h" || command == "help") {

@@ -137,6 +137,11 @@ struct IndexBuilderConfig : CommonConfig {
   float bScoringParam_ = 0.75;
   float kScoringParam_ = 1.75;
 
+  // Materialized views to be written after normal index build is complete.
+  using WriteMaterializedViews =
+      std::vector<std::pair<std::string, std::string>>;
+  WriteMaterializedViews writeMaterializedViews_;
+
   // Assert that the given configuration is valid.
   void validate() const;
 
@@ -253,6 +258,9 @@ class Qlever {
   // Preload a materialized view s.t. the first query to the view does not have
   // to load the view.
   void loadMaterializedView(std::string name) const;
+
+  // Check if a materialized view with the given name is currently loaded.
+  bool isMaterializedViewLoaded(const std::string& name) const;
 
   // Write the contents of the `NamedResultCache` to disk.
   template <typename Serializer>

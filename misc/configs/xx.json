@@ -1,0 +1,14 @@
+{
+    "index_name": "xx",
+    "index_directory": "./databases",
+    "input_files": [
+        {
+            "path": "misc/latest.nq",
+            "format": "nq"
+        },
+        {"path": "./qcy.nt", "format": "nt"}
+    ],
+    "memory_limit_gb": 6,
+    "vocabulary_type": "on-disk-compressed-geo-split",
+    "settings_file": "./misc/configs/settings.json"
+}
