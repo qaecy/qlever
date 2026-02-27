@@ -1,0 +1,41 @@
+FROM alpine:3.22 AS builder
+
+ENV LANG=C.UTF-8
+
+RUN apk add --no-cache \
+    build-base \
+    cmake \
+    ninja \
+    git \
+    bash \
+    pkgconfig \
+    icu-dev \
+    openssl-dev \
+    zstd-dev \
+    zlib-dev \
+    jemalloc-dev \
+    boost-dev \
+    linux-headers \
+    util-linux-dev
+
+COPY src /qlever/src/
+COPY test /qlever/test/
+COPY benchmark /qlever/benchmark/
+COPY CMakeLists.txt /qlever/
+COPY GitVersion.cmake /qlever/
+COPY CompilationInfo.cmake /qlever/
+
+WORKDIR /qlever/build/
+
+# DONT_UPDATE_COMPILATION_INFO avoids a git subprocess (no .git present in the
+# Docker build context). Only the lightweight CliUtilsTest target is built, so
+# the full engine/index/parser chain is configured but never compiled.
+RUN cmake -DCMAKE_BUILD_TYPE=Release \
+          -DLOGLEVEL=INFO \
+          -DDONT_UPDATE_COMPILATION_INFO=true \
+          -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" \
+          -GNinja ..
+
+RUN cmake --build . --target CliUtilsTest -j$(nproc)
+
+CMD ["./test/CliUtilsTest", "--gtest_output=xml:/test-results.xml"]

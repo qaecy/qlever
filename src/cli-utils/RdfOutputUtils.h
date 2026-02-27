@@ -43,7 +43,6 @@ class ProgressTracker {
   std::chrono::steady_clock::time_point startTime_;
   std::chrono::steady_clock::time_point lastProgressTime_;
   std::chrono::seconds progressInterval_;
-  size_t totalItems_;
 
  public:
   explicit ProgressTracker(
