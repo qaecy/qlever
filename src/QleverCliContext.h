@@ -41,6 +41,14 @@ namespace qlever {
 // This is a local replacement for the qlever::Qlever class to bypass the broken
 // core file (Qlever.cpp). It replicates the state and initialization logic of
 // qlever::Qlever but ensures compatibility with the latest repo APIs.
+//
+// THREAD-SAFETY (C3): This class is NOT thread-safe. It must only be accessed
+// from a single thread at a time. cache_, namedResultCache_, and
+// materializedViewsManager_ are marked mutable because they are updated during
+// logically-const query operations, but they carry no internal synchronization
+// guarantees in the CLI context. query() and update() must not be called
+// concurrently. If concurrent access is ever required, an external mutex must
+// guard all method calls.
 class QleverCliContext {
  public:
   mutable QueryResultCache cache_{};
@@ -73,7 +81,14 @@ class QleverCliContext {
                         PERCENTAGE_OF_TRIPLES_FOR_SORT_ESTIMATE / 100);
   }
 
-  using QueryPlan = qlever::QueryPlan;
+  // Local query plan struct that carries the CancellationHandle created during
+  // planning so that the same handle is reused during execution (C4 fix).
+  struct QueryPlan {
+    std::shared_ptr<QueryExecutionTree> qet;
+    std::shared_ptr<QueryExecutionContext> qec;
+    ParsedQuery parsedQuery;
+    std::shared_ptr<ad_utility::CancellationHandle<>> handle;
+  };
 
   QueryPlan parseAndPlanQuery(std::string query) const {
     auto qecPtr = std::make_shared<QueryExecutionContext>(
@@ -88,18 +103,19 @@ class QleverCliContext {
     qet.isRoot() = true;
 
     auto qetPtr = std::make_shared<QueryExecutionTree>(std::move(qet));
-    return {qetPtr, std::move(qecPtr), std::move(parsedQuery)};
+    return {qetPtr, std::move(qecPtr), std::move(parsedQuery), std::move(handle)};
   }
 
   std::string query(const QueryPlan& queryPlan,
                     ad_utility::MediaType mediaType =
                         ad_utility::MediaType::sparqlJson) const {
-    const auto& [qet, qec, parsedQuery] = queryPlan;
     ad_utility::Timer timer{ad_utility::Timer::Started};
-    auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
+    // Reuse the same handle that was used during planning.
+    auto handle = queryPlan.handle;
     std::string result;
     auto responseGenerator = ExportQueryExecutionTrees::computeResult(
-        parsedQuery, *qet, mediaType, timer, std::move(handle));
+        queryPlan.parsedQuery, *queryPlan.qet, mediaType, timer,
+        std::move(handle));
     for (const auto& batch : responseGenerator) {
       result += batch;
     }
@@ -138,8 +154,7 @@ class QleverCliContext {
   void queryAndPinResultWithName(
       QueryExecutionContext::PinResultWithName options, std::string queryStr) {
     auto queryPlan = parseAndPlanQuery(std::move(queryStr));
-    auto& [qet, qec, parsedQuery] = queryPlan;
-    qec->pinResultWithName() = std::move(options);
+    queryPlan.qec->pinResultWithName() = std::move(options);
     [[maybe_unused]] auto result = this->query(queryPlan);
   }
 

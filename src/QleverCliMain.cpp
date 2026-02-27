@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -10,6 +12,7 @@
 #include "cli-utils/IndexStatsUtils.h"
 #include "cli-utils/QueryUtils.h"
 #include "cli-utils/RdfOutputUtils.h"
+#include "cli-utils/StreamSuppressor.h"
 #include "engine/ExecuteUpdate.h"
 #include "engine/QueryPlanner.h"
 #include "index/InputFileSpecification.h"
@@ -64,35 +67,6 @@ json createSuccessResponse(const std::string& message) {
           std::chrono::system_clock::now().time_since_epoch())
           .count();
   return response;
-}
-
-ad_utility::MediaType getMediaType(const std::string& format) {
-  if (format == "csv") return ad_utility::MediaType::csv;
-  if (format == "tsv") return ad_utility::MediaType::tsv;
-  if (format == "sparql-xml") return ad_utility::MediaType::sparqlXml;
-  if (format == "qlever-json") return ad_utility::MediaType::qleverJson;
-  return ad_utility::MediaType::sparqlJson;  // default
-}
-
-// Helper function to extract value from SPARQL JSON binding
-std::string extractValue(const json& binding) {
-  const auto& type = binding["type"];
-  const auto& value = binding["value"];
-
-  if (type == "uri") {
-    return "<" + value.get<std::string>() + ">";
-  } else if (type == "literal") {
-    std::string result = "\"" + value.get<std::string>() + "\"";
-    if (binding.contains("datatype")) {
-      result += "^^<" + binding["datatype"].get<std::string>() + ">";
-    } else if (binding.contains("xml:lang")) {
-      result += "@" + binding["xml:lang"].get<std::string>();
-    }
-    return result;
-  } else if (type == "bnode") {
-    return "_:" + value.get<std::string>();
-  }
-  return value.get<std::string>();
 }
 
 void printUsage(const char* programName) {
@@ -156,8 +130,6 @@ void printUsage(const char* programName) {
 }
 
 // Helper to trim and uppercase a string (for query type detection)
-#include <algorithm>
-#include <cctype>
 std::string trimAndUpper(const std::string& s) {
   auto start = s.find_first_not_of(" \t\n\r");
   if (start == std::string::npos) return "";
@@ -166,6 +138,23 @@ std::string trimAndUpper(const std::string& s) {
   std::transform(firstWord.begin(), firstWord.end(), firstWord.begin(),
                  ::toupper);
   return firstWord;
+}
+
+// Returns the memory limit to use: QLEVER_MEMORY_LIMIT_GB env var if set,
+// otherwise the provided default (in GB).
+static ad_utility::MemorySize memoryLimit(double defaultGb = 4.0) {
+  if (const char* env = std::getenv("QLEVER_MEMORY_LIMIT_GB")) {
+    try {
+      double gb = std::stod(env);
+      if (gb > 0.0) {
+        return ad_utility::MemorySize::bytes(
+            static_cast<size_t>(gb * 1024.0 * 1024.0 * 1024.0));
+      }
+    } catch (const std::exception&) {
+    }
+  }
+  return ad_utility::MemorySize::bytes(
+      static_cast<size_t>(defaultGb * 1024.0 * 1024.0 * 1024.0));
 }
 
 int executeQuery(const std::string& indexBasename, const std::string& queryStr,
@@ -199,39 +188,27 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
       }
     }
 
-    // Redirect QLever's verbose logging to /dev/null during query execution
-    std::streambuf* clogBuf = std::clog.rdbuf();
-    std::streambuf* cerrBuf = std::cerr.rdbuf();
-    std::ofstream devNull("/dev/null");
-    std::clog.rdbuf(devNull.rdbuf());
-    std::cerr.rdbuf(devNull.rdbuf());
-
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
+    config.memoryLimit_ = memoryLimit();
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::QueryExecutor executor(qlever);
     std::string result;
 
-    if (type == "CONSTRUCT" || type == "DESCRIBE") {
-      // For CONSTRUCT and DESCRIBE, use the construct executor
-      // (no file output, just return as string)
-      result = executor.executeConstructQueryToString(queryStr, format);
-    } else {
-      // For SELECT, ASK, use the standard executor
-      result = executor.executeQuery(queryStr, format);
-    }
+    {
+      cli_utils::SuppressStreams suppress;
+      if (type == "CONSTRUCT" || type == "DESCRIBE") {
+        result = executor.executeConstructQueryToString(queryStr, format);
+      } else {
+        result = executor.executeQuery(queryStr, format);
+      }
 
-    // If a name is provided, pin the result
-    if (!name.empty()) {
-      qlever->queryAndPinResultWithName(name, queryStr);
+      if (!name.empty()) {
+        qlever->queryAndPinResultWithName(name, queryStr);
+      }
     }
-
-    // Restore logging
-    std::clog.rdbuf(clogBuf);
-    std::cerr.rdbuf(cerrBuf);
 
     std::cout << result << std::endl;
     return 0;
@@ -249,7 +226,7 @@ int executeUpdate(const std::string& indexBasename,
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
+    config.memoryLimit_ = memoryLimit();
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
 
@@ -262,7 +239,7 @@ int executeUpdate(const std::string& indexBasename,
     return 0;
   } catch (const std::exception& e) {
     json errorResponse = createErrorResponse(e.what(), updateQuery);
-    std::cout << errorResponse.dump() << std::endl;
+    std::cerr << errorResponse.dump() << std::endl;
     return 1;
   }
 }
@@ -278,7 +255,7 @@ int serializeDatabase(const std::string& indexBasename,
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
+    config.memoryLimit_ = memoryLimit();
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::DatabaseSerializer serializer(qlever);
@@ -310,12 +287,12 @@ int buildIndex(const std::string& jsonInput) {
   } catch (const json::parse_error& e) {
     json response =
         createErrorResponse("Invalid JSON input: " + std::string(e.what()));
-    std::cout << response.dump() << std::endl;
+    std::cerr << response.dump() << std::endl;
     return 1;
   } catch (const std::exception& e) {
     json response =
         createErrorResponse("Unexpected error: " + std::string(e.what()));
-    std::cout << response.dump() << std::endl;
+    std::cerr << response.dump() << std::endl;
     return 1;
   }
 }
@@ -325,8 +302,7 @@ int getIndexStats(const std::string& indexBasename) {
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ =
-        ad_utility::MemorySize::gigabytes(1);  // Minimal for stats
+    config.memoryLimit_ = memoryLimit(1.0);  // Minimal for stats
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::IndexStatsCollector statsCollector(qlever);
@@ -338,7 +314,7 @@ int getIndexStats(const std::string& indexBasename) {
   } catch (const std::exception& e) {
     json response = createErrorResponse(e.what());
     response["indexBasename"] = indexBasename;
-    std::cout << response.dump(2) << std::endl;
+    std::cerr << response.dump(2) << std::endl;
     return 1;
   }
 }
@@ -350,7 +326,7 @@ int executeQueryToFile(const std::string& indexBasename,
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
+    config.memoryLimit_ = memoryLimit();
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::QueryExecutor executor(qlever);
@@ -381,7 +357,7 @@ int executeQueryToFile(const std::string& indexBasename,
     json response =
         createErrorResponse("Query execution failed: " + std::string(e.what()));
     response["query"] = queryStr;
-    std::cout << response.dump() << std::endl;
+    std::cerr << response.dump() << std::endl;
     return 1;
   }
 }

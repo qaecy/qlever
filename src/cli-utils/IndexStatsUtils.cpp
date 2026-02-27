@@ -1,4 +1,5 @@
 #include "IndexStatsUtils.h"
+#include "StreamSuppressor.h"
 
 #include <chrono>
 #include <fstream>
@@ -15,22 +16,18 @@ IndexStatsCollector::IndexStatsCollector(
 void IndexStatsCollector::runStatsQuery(nlohmann::json& response,
                                         const std::string& name,
                                         const std::string& query) const {
-  // Suppress QLever's verbose logging for queries
-  std::ofstream nullStream("/dev/null");
-  std::streambuf* originalCerrBuf = std::cerr.rdbuf();
-
   try {
-    std::cerr.rdbuf(nullStream.rdbuf());  // Suppress logs
     ad_utility::Timer timer{ad_utility::Timer::Started};
-    std::string result = qlever_->query(query);
+    std::string result;
+    {
+      cli_utils::SuppressStreams suppress;
+      result = qlever_->query(query);
+    }
     auto executionTime = timer.msecs().count();
-    std::cerr.rdbuf(originalCerrBuf);  // Restore logs
-
     response[name] = {{"query", query},
                       {"result", result},
                       {"executionTimeMs", executionTime}};
   } catch (const std::exception& e) {
-    std::cerr.rdbuf(originalCerrBuf);  // Restore logs
     response[name] = {
         {"query", query}, {"error", e.what()}, {"executionTimeMs", 0}};
   }
