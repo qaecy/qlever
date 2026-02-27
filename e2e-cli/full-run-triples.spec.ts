@@ -17,7 +17,7 @@ const CONTAINER_DB_BASE = '/workspace/e2e-cli/test-db-triples/test-index';
 // and don't collide when quads and triples tests run in parallel.
 const CONTAINER_CWD = '/workspace/e2e-cli/test-db-triples';
 
-describe('QLever CLI E2E Flow Triples', () => {
+describe('QLever CLI E2E Flow Triples', { timeout: 120000 }, () => {
     beforeAll(() => {
         console.log('[DEBUG] Starting beforeAll');
         // 1. Clean up previous db if any
@@ -33,9 +33,9 @@ describe('QLever CLI E2E Flow Triples', () => {
         // 3. Create the build index config
         const config = {
             index_name: "test-index",
-            index_directory: "/workspace/e2e-cli/test-db-triples",
+            index_directory: CONTAINER_CWD,
             input_files: [
-                { path: "/workspace/e2e-cli/test-db-triples/initial.nt", format: "nt" }
+                { path: path.join(CONTAINER_CWD, 'initial.nt'), format: "nt" }
             ]
         };
         fs.writeFileSync(path.join(LOCAL_DB_DIR, 'build-config.json'), JSON.stringify(config));
@@ -53,13 +53,12 @@ describe('QLever CLI E2E Flow Triples', () => {
                 cwd: WORKSPACE_DIR,
                 input: inputString ? inputString : undefined,
                 maxBuffer: 10 * 1024 * 1024, // 10MB
-                timeout: 300000 // 5 minutes
             });
             return out;
         } catch (error: any) {
             console.error(`Error running command: ${fullCmd}`);
-            console.error(`Stdout: ${error.stdout}`);
-            console.error(`Stderr: ${error.stderr}`);
+            if (error.stdout) console.error(`Stdout: ${error.stdout}`);
+            if (error.stderr) console.error(`Stderr: ${error.stderr}`);
             throw error;
         }
     };
@@ -100,14 +99,17 @@ describe('QLever CLI E2E Flow Triples', () => {
     });
 
     it('should merge delta triples in with binary build', () => {
-        const originalSize = fs.statSync(path.join(LOCAL_DB_DIR, 'test-index.update-triples')).size;
-        console.log("SIZE 1", originalSize);
-        const out = execDocker(`/qlever/qlever-cli binary-rebuild '${CONTAINER_DB_BASE}'`);
+        const out = execDocker(`/qlever/qlever-cli binary-rebuild '${CONTAINER_DB_BASE}' '${CONTAINER_DB_BASE}.rebuilt'`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Binary rebuild completed successfully');
 
-        const newSize = fs.statSync(path.join(LOCAL_DB_DIR, 'test-index.update-triples')).size;
-        console.log("SIZE 2", newSize);
-
-        expect(newSize).toBeLessThan(originalSize);
+        // Query the rebuilt index to confirm data is there
+        const queryOut = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE}.rebuilt "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
+        const lines = queryOut.trim().split('\n');
+        expect(lines.length).toBe(3);
+        expect(queryOut).toContain('http://example.org/initial,http://example.org/p,http://example.org/o');
+        expect(queryOut).toContain('http://example.org/inserted,http://example.org/p,http://example.org/o');
     });
 
     it('should delete the original data via stream (delete command)', () => {

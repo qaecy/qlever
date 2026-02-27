@@ -562,9 +562,11 @@ class IndexImpl {
 
   // Create a `CompressedRelationWriter` and a callback that adds the metadata
   // of large relations to the `metaData` object.
+  // TEMPORARY FIX: Added `numThreads` to allow limiting the number of threads
+  // during binary-rebuild. TODO: Remove after #2696 or equivalent.
   CompressedRelationWriter::WriterAndCallback getWriterAndCallback(
       IndexMetaDataMmapDispatcher::WriteType& metaData, size_t numColumns,
-      const std::string& fileName) const;
+      const std::string& fileName, size_t numThreads = 10) const;
 
   // TODO<joka921> Get rid of the `numColumns` by including them into the
   // `sortedTriples` argument.
@@ -583,10 +585,13 @@ class IndexImpl {
   // order.
   // Return the number of triples written and the metadata for the written
   // permutation.
+  // TEMPORARY FIX: Added `numThreads` to allow limiting the number of threads
+  // during binary-rebuild. TODO: Remove after #2696 or equivalent.
   std::tuple<size_t, IndexMetaDataMmapDispatcher::WriteType>
   createPermutationImpl(
       size_t numColumns, const std::string& fileName,
-      ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples);
+      ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples,
+      size_t numThreads = 10);
 
  protected:
   // _______________________________________________________________________
@@ -643,11 +648,13 @@ class IndexImpl {
   // Return the number of distinct values on the first column of the written
   // permutation. (Predicates for PSO/POS, Subjects for SPO/SOP, Objects for
   // OSP/OPS) and the metadata for the written permutation.
+  // TEMPORARY FIX: Added `numThreads` to allow limiting the number of threads
+  // during binary-rebuild. TODO: Remove after #2696 or equivalent.
   std::pair<size_t, IndexMetaDataMmapDispatcher::WriteType>
   createPermutationWithoutMetadata(
       size_t numColumns,
       ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples,
-      const Permutation& permutation, bool internal);
+      const Permutation& permutation, bool internal, size_t numThreads = 10);
 
   // Finalize the writing of a permutation by appending the metadata to
   // the corresponding file on disk.

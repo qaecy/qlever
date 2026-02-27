@@ -25,9 +25,11 @@
 #include <tuple>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "backports/algorithm.h"
 #include "engine/idTable/IdTable.h"
 #include "global/Id.h"
+#include "global/RuntimeParameters.h"
 #include "index/IndexImpl.h"
 #include "index/IndexRebuilderImpl.h"
 #include "index/LocalVocabEntry.h"
@@ -286,13 +288,23 @@ boost::asio::awaitable<void> createPermutationWriterTask(
           *locatedTriplesSharedState);
       auto [numColumns, additionalColumns] =
           getNumberOfColumnsAndAdditionalColumns(blockMetadataRanges);
-      return newIndex.createPermutationWithoutMetadata(
+      // TEMPORARY FIX: Use only 1 thread per writer to avoid starvation
+      // during binary-rebuild (~170 threads total otherwise).
+      // TODO: Remove after #2696 or equivalent.
+      constexpr size_t REBUILD_THREADS = 1;
+
+      AD_LOG_INFO << "Starting rebuild for " << permutation.readableName()
+                  << (isInternal ? " (internal)" : "") << " ..." << std::endl;
+      auto result = newIndex.createPermutationWithoutMetadata(
           numColumns,
           readIndexAndRemap(
               permutation, blockMetadataRanges, locatedTriplesSharedState,
               localVocabMapping, insertionPositions, blankNodeBlocks,
               minBlankNodeIndex, cancellationHandle, additionalColumns),
-          permutation, isInternal);
+          permutation, isInternal, REBUILD_THREADS);
+      AD_LOG_INFO << "Finished rebuild for " << permutation.readableName()
+                  << (isInternal ? " (internal)" : "") << std::endl;
+      return result;
     };
   };
   auto taskA =
@@ -372,7 +384,11 @@ void materializeToIndex(
   auto patternThreads = static_cast<size_t>(index.usePatterns());
   size_t numberOfPermutations = index.hasAllPermutations() ? 8 : 4;
   namespace net = boost::asio;
-  net::thread_pool threadPool{patternThreads + numberOfPermutations};
+  // TEMPORARY FIX: Use 10 threads for the ASIO pool to avoid deadlocks.
+  // The number of concurrent writer tasks is limited by the number of
+  // permutations.
+  // TODO: Remove after #2696 or equivalent.
+  net::thread_pool threadPool{10};
 
   if (index.usePatterns()) {
     net::post(threadPool, [&newIndex, &index, &insertionPositions]() {
@@ -395,6 +411,17 @@ void materializeToIndex(
     permutationSettings.push_back({{SPO, SOP}, false});
     permutationSettings.push_back({{OPS, OSP}, false});
   }
+
+  // TEMPORARY FIX: Avoid thread starvation by limiting lazy index scan threads.
+  // We use 1 thread to avoid potential deadlocks in pull-based scanning.
+  // TODO: Remove after #2696 or equivalent.
+  auto originalLazyThreads =
+      getRuntimeParameter<&::RuntimeParameters::lazyIndexScanNumThreads_>();
+  setRuntimeParameter<&::RuntimeParameters::lazyIndexScanNumThreads_>(1);
+  absl::Cleanup restoreThreads = [originalLazyThreads]() {
+    setRuntimeParameter<&::RuntimeParameters::lazyIndexScanNumThreads_>(
+        originalLazyThreads);
+  };
 
   for (const auto& [permutationEnums, isInternal] : permutationSettings) {
     auto [a, b] = permutationEnums;

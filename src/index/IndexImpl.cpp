@@ -849,13 +849,15 @@ std::string IndexImpl::getFilenameForPermutation(const Permutation& permutation,
 // _____________________________________________________________________________
 CompressedRelationWriter::WriterAndCallback IndexImpl::getWriterAndCallback(
     IndexMetaDataMmapDispatcher::WriteType& metaData, size_t numColumns,
-    const std::string& fileName) const {
+    const std::string& fileName, size_t numThreads) const {
   static_assert(IndexMetaDataMmapDispatcher::WriteType::isMmapBased_);
   metaData.setup(fileName + MMAP_FILE_SUFFIX, ad_utility::CreateTag{});
 
+  // TEMPORARY FIX: Use `numThreads` to avoid starvation in binary-rebuild.
+  // TODO: Remove after #2696 or equivalent.
   auto writer = std::make_unique<CompressedRelationWriter>(
       numColumns, ad_utility::File(fileName, "w"),
-      blocksizePermutationPerColumn_);
+      blocksizePermutationPerColumn_, numThreads);
 
   auto callback =
       liftCallback([&metaData](const auto& md) { metaData.add(md); });
@@ -897,9 +899,13 @@ IndexImpl::createPermutationPairImpl(size_t numColumns,
 std::tuple<size_t, IndexImpl::IndexMetaDataMmapDispatcher::WriteType>
 IndexImpl::createPermutationImpl(
     size_t numColumns, const std::string& fileName,
-    ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples) {
+    ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples,
+    size_t numThreads) {
   IndexMetaDataMmapDispatcher::WriteType metaData;
-  auto writerAndCallback = getWriterAndCallback(metaData, numColumns, fileName);
+  // TEMPORARY FIX: Use `numThreads` to avoid starvation in binary-rebuild.
+  // TODO: Remove after #2696 or equivalent.
+  auto writerAndCallback =
+      getWriterAndCallback(metaData, numColumns, fileName, numThreads);
 
   // We can always supply the tables with the correct permutation. No need to
   // re-order everything.
@@ -950,12 +956,14 @@ std::pair<size_t, IndexImpl::IndexMetaDataMmapDispatcher::WriteType>
 IndexImpl::createPermutationWithoutMetadata(
     size_t numColumns,
     ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples,
-    const Permutation& permutation, bool internal) {
+    const Permutation& permutation, bool internal, size_t numThreads) {
   AD_LOG_INFO << "Creating permutation " << permutation.readableName() << " ..."
               << std::endl;
   std::string fileName = getFilenameForPermutation(permutation, internal);
-  auto metaData =
-      createPermutationImpl(numColumns, fileName, std::move(sortedTriples));
+  // TEMPORARY FIX: Use `numThreads` to avoid starvation in binary-rebuild.
+  // TODO: Remove after #2696 or equivalent.
+  auto metaData = createPermutationImpl(numColumns, fileName,
+                                        std::move(sortedTriples), numThreads);
 
   auto& [numDistinctCol0, meta] = metaData;
   meta.calculateStatistics(numDistinctCol0);

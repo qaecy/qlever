@@ -303,7 +303,10 @@ class CompressedRelationWriter {
   Id currentCol0Id_ = Id::makeUndefined();
   size_t currentRelationPreviousSize_ = 0;
 
-  ad_utility::TaskQueue<false> blockWriteQueue_{20, 10};
+  // TEMPORARY FIX: Allow limiting the number of threads to avoid starvation
+  // in high-pressure contexts like binary-rebuild.
+  // TODO: Remove this once #2696 or equivalent is merged upstream.
+  ad_utility::TaskQueue<false> blockWriteQueue_;
   ad_utility::timer::ThreadSafeTimer blockWriteQueueTimer_;
 
   // This callback is invoked for each block of small relations (which share the
@@ -320,10 +323,12 @@ class CompressedRelationWriter {
   /// Create using a filename, to which the relation data will be written.
   explicit CompressedRelationWriter(
       size_t numColumns, ad_utility::File f,
-      ad_utility::MemorySize uncompressedBlocksizePerColumn)
+      ad_utility::MemorySize uncompressedBlocksizePerColumn,
+      size_t numThreads = 10)
       : outfile_{std::move(f)},
         numColumns_{numColumns},
-        uncompressedBlocksizePerColumn_{uncompressedBlocksizePerColumn} {}
+        uncompressedBlocksizePerColumn_{uncompressedBlocksizePerColumn},
+        blockWriteQueue_{20, numThreads} {}
   // Two helper types used to make the interface of the function
   // `createPermutationPair` below safer and more explicit.
   using MetadataCallback =

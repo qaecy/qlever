@@ -17,7 +17,7 @@ const CONTAINER_DB_BASE = '/workspace/e2e-cli/test-db-quads/test-index';
 // and don't collide when quads and triples tests run in parallel.
 const CONTAINER_CWD = '/workspace/e2e-cli/test-db-quads';
 
-describe('QLever CLI E2E Flow Quads', () => {
+describe('QLever CLI E2E Flow Quads', { timeout: 120000 }, () => {
     beforeAll(() => {
         // 1. Clean up previous db if any
         if (fs.existsSync(LOCAL_DB_DIR)) {
@@ -32,9 +32,9 @@ describe('QLever CLI E2E Flow Quads', () => {
         // 3. Create the build index config
         const config = {
             index_name: "test-index",
-            index_directory: "/workspace/e2e-cli/test-db-quads",
+            index_directory: CONTAINER_CWD,
             input_files: [
-                { path: "/workspace/e2e-cli/test-db-quads/initial.nq", format: "nq" }
+                { path: path.join(CONTAINER_CWD, 'initial.nq'), format: "nq" }
             ]
         };
         fs.writeFileSync(path.join(LOCAL_DB_DIR, 'build-config.json'), JSON.stringify(config));
@@ -143,14 +143,14 @@ describe('QLever CLI E2E Flow Quads', () => {
     });
 
     it('should execute binary-rebuild successfully', () => {
-        const out = execDocker(`/qlever/qlever-cli binary-rebuild ${CONTAINER_DB_BASE}`);
+        const out = execDocker(`/qlever/qlever-cli binary-rebuild ${CONTAINER_DB_BASE} ${CONTAINER_DB_BASE}.rebuilt`);
         const result = JSON.parse(out);
         expect(result.success).toBe(true);
         expect(result.message).toContain('Binary rebuild completed successfully');
     });
 
     it('should still have the correct data after binary-rebuild', () => {
-        const out = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
+        const out = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE}.rebuilt "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
         const lines = out.trim().split('\n');
         // Header + inserted = 2 lines (since initial was deleted before rebuild)
         expect(lines.length).toBe(2);

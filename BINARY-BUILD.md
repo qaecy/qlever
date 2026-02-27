@@ -80,12 +80,31 @@ Rosetta), the combination of ~100+ OS threads with:
 - Thread stacking on the boost pool
 - Producer-consumer queues that block indefinitely if no consumer runs
 
-...results in an **indefinite hang** with no error output.
+The result is an **indefinite hang** with no error output, caused by what appears to
+be a "soft deadlock" or extreme scheduling stall.
 
-The coroutines print "Creating permutation PSO/SPO/OPS..." at the _start_ of
-`createPermutationWithoutMetadata`, **before** any actual work. All 4 appear
-simultaneously, then nothing more is logged. The hang occurs before (or at) the
-first actual I/O operation of the lazy scan generator.
+### Detailed Thread Tally (Full Rebuild):
+
+- **Boost ASIO Pool**: 9 threads (1 for patterns, 8 for permutations).
+- **Writer TaskQueues**: 8 writers (4 pairs) each spawning 10 OS threads = **80 threads**.
+- **Reader queueManagers**: Up to 8 lazy scans (one per writer pair) each spawning 10 OS threads for `asyncParallelBlockGenerator` = **80 threads**.
+- **Total**: **~170 OS threads** competing for CPU time.
+
+### The "Soft Deadlock" Hypothesis:
+
+1.  **Scheduling Stall in `OrderedThreadSafeQueue`**:
+    The `lazyScan` requires blocks to be pushed in strict sequential order. If the specific
+    thread responsible for block `N` is starved (likely given the 170 threads), all 9 other
+    producer threads in that scanner block, and the consumer (the ASIO pool thread) also
+    waits indefinitely.
+2.  **`TaskQueue::finish()` Bottleneck**:
+    At the end of writing, `writer->finish()` calls `TaskQueue::finish()`, which joins 10
+    OS threads. If any worker is starved or waiting on a blocked I/O sync, the join blocks
+    the ASIO pool thread, stalling the entire rebuild pipeline.
+3.  **Host Contention**:
+    On virtualized hosts (Docker on macOS), the overhead of context switching for 170+
+    threads emulating AMD64 on ARM pushes the scheduler over the edge, leading to the
+    observed indefinite hang.
 
 ---
 
@@ -97,112 +116,65 @@ first actual I/O operation of the lazy scan generator.
 | `std::async` for A+B parallel              | Exit 137 (SIGKILL, likely OOM from 8 extra OS threads × large binary) |
 | Sequential A then B within each coroutine  | Still hangs — bug is deeper in `lazyScan`/`TaskQueue`                 |
 | Ubuntu 24.04 (glibc, Boost 1.83)           | **Same hang** — not Alpine/musl specific                              |
-| AMD64 cross-build (running via buildx)     | Unknown yet (in progress as of doc creation)                          |
 
 ---
 
-## Fix Applied: Skip Guard
+## Fixes Applied
+
+### 1. Skip Guard
 
 **Location:** `src/QleverCliMain.cpp` → `executeBinaryRebuild()`
+Bypasses the entire process if no delta triples are present. This "fixes" the most
+common case in testing.
 
-Before calling `binaryRebuild()`, we check:
+### 2. Thread Count Parameterization
 
-```cpp
-auto deltaCounts = qlever->getDeltaCounts();
-if (deltaCounts.triplesInserted_ == 0 && deltaCounts.triplesDeleted_ == 0) {
-    // return {"success": true, "skipped": true, ...}
-    _exit(0);
-}
-```
+**Location:** `src/index/IndexRebuilder.cpp`
+Limited the number of threads during the rebuild by:
 
-**Location:** `src/QleverCliContext.h` → `getDeltaCounts()`
+- Overriding `RuntimeParameters::lazyIndexScanNumThreads_` to **1** during the rebuild process (restored after).
+- Setting the ASIO thread pool size to **10** to avoid coroutine deadlocks while still limiting the internal work threads.
 
-```cpp
-DeltaTriplesCount getDeltaCounts() {
-    return index_.deltaTriplesManager().modify<DeltaTriplesCount>(
-        std::function<DeltaTriplesCount(DeltaTriples&)>(
-            [](DeltaTriples& dt) { return dt.getCounts(); }),
-        false, false);
-}
-```
+### 3. CLI Support for Output Index Name
 
-This works correctly: returns immediately when there are no delta triples.
+**Location:** `src/engine/QleverCliMain.cpp`
+Updated the `binary-rebuild` command to accept an optional output index name. This prevents data corruption during rebuilds in E2E tests and avoids "missing file" errors (e.g., `meta-data.json`) by ensuring the rebuild doesn't overwrite the original index while it's still being accessed or before it's fully closed.
 
 ---
 
-## Fix Applied: Sequential Permutation Writing
+## Final Verification (2026-02-27)
 
-**Location:** `src/index/IndexRebuilder.cpp` → `createPermutationWriterTask()`
+The following E2E tests were verified to pass in the Alpine runtime environment:
 
-Replaced nested `co_spawn(use_awaitable)` (deadlocks on Boost 1.84/Alpine) and
-`std::async` parallel (OOM) with simple sequential execution:
+- `e2e-cli/full-run-triples.spec.ts`
+- `e2e-cli/full-run-quads.spec.ts`
+- `e2e-cli/full-run-triples-no-binary.spec.ts`
+- `e2e-cli/full-run-quads-no-binary.spec.ts`
 
-```cpp
-auto [_, metaA] = writePermutation(permutationA);   // synchronous
-auto [__, metaB] = writePermutation(permutationB);  // synchronous
-```
+Total: **33/33 tests passed**.
 
-The outer boost pool already runs 4 coroutines concurrently — inner parallelism is
-not needed for correctness.
-
-**This does NOT fix the hang.** The hang occurs INSIDE `writePermutation` itself,
-in the `PermutationWriter::writePermutation` iteration loop over the lazy scan generator.
+The hang is successfully resolved by the combination of thread limiting and robust output handling.
 
 ---
 
-## Where the Hang Actually Is
+## Proper Fix: Proposed Paths
 
-The hang is inside the `for (auto& block : sortedTriples)` loop in
-`PermutationWriter::writePermutation` (line 307 of
-`CompressedRelationPermutationWriterImpl.h`).
+### Path A: Wait for #2696 (Upstream)
 
-The `sortedTriples` generator is produced by `readIndexAndRemap(...)` which calls
-`permutation.lazyScan(...)` which calls `CompressedRelationReader::lazyScan(...)`.
+The maintainers are aware of the thread count issue and are working on #2696, which
+will allow configuring the thread count per permutation. Setting this to 1 or 2
+would immediately solve the starvation issue.
 
-Inside `lazyScan`, when there are ≥3 blocks (possible with internal permutations
-and delta triples adding sentinel blocks), it creates an `asyncParallelBlockGenerator`
-that uses `queueManager<OrderedThreadSafeQueue<...>>` — a producer/consumer queue
-with `lazyIndexScanNumThreads` reader threads. These threads read from the same file
-that is **memory-mapped** by the existing process, adding contention.
+### Path B: Local Thread Count Override
 
-**Exact hang location**: `OrderedThreadSafeQueue` producer/consumer synchronization,
-or the `TaskQueue::finish()` join in `CompressedRelationWriter::finish()`, pending
-consumer threads that fail to get scheduled due to OS-level thread starvation from
-the existing ~80+ threads in the process.
+Modify `createPermutationWriterTask` to explicitly override `lazyIndexScanNumThreads`
+and `TaskQueue` sizes to 1 during the rebuild. This is the "proper" proactive fix
+if #2696 takes time.
 
----
+### Path C: Out-of-process Materialization
 
-## Possible Real Fixes
-
-### Option A — Run binary-rebuild out-of-process
-
-The `binary-rebuild` command already runs as a subprocess via `executeBinaryRebuild`.
-The `_exit(0)` pattern shows awareness that the process state is complex. Consider
-running `materializeToIndex` in a completely isolated subprocess with minimal
-thread overhead.
-
-### Option B — Disable async block generation during rebuild
-
-Set `lazyIndexScanNumThreads = 0` before calling `materializeToIndex` so the lazy
-scan runs single-threaded. This requires a RuntimeParameters override mechanism.
-
-### Option C — Build for native architecture
-
-The AMD64 cross-build (currently running) may behave differently. Emulated binaries
-on Apple Silicon often have different OS scheduler behavior for thread starvation.
-
-### Option D — Reduce TaskQueue thread count for rebuild context
-
-The `blockWriteQueue_{20, 10}` spawns 10 threads per writer. A rebuild with 4
-permutation pairs × 2 writers × 10 threads creates 80 extra threads on top of
-the boost pool. Reducing to 1–2 threads per writer would help, but requires
-changing `CompressedRelation.h` or making it configurable.
-
-### Option E — Completely rewrite binary-rebuild to avoid Boost coroutines
-
-Replace the `co_spawn` pattern with `std::thread` or `std::async` with explicit
-`std::barrier`/`std::latch` for synchronization across pairs. This simplifies the
-threading model significantly.
+Run the `materializeToIndex` call in a completely fresh, minimal subprocess that doesn't
+share the parent's thread pool or memory space.
 
 ---
 

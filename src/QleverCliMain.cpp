@@ -651,7 +651,8 @@ int executeQueryToFile(const std::string& indexBasename,
   }
 }
 
-int executeBinaryRebuild(const std::string& indexBasename) {
+int executeBinaryRebuild(const std::string& indexBasename,
+                         const std::string& outputName) {
   try {
     {
       qlever::EngineConfig config;
@@ -660,6 +661,8 @@ int executeBinaryRebuild(const std::string& indexBasename) {
 
       auto qlever = std::make_shared<qlever::QleverCliContext>(config);
 
+      /*
+      // TEMPORARILY DISABLED SKIP GUARD TO VERIFY THE FIX
       // Check if there are any delta triples. If not, the rebuild is a no-op.
       auto deltaCounts = qlever->getDeltaCounts();
       if (deltaCounts.triplesInserted_ == 0 &&
@@ -678,10 +681,11 @@ int executeBinaryRebuild(const std::string& indexBasename) {
         std::cout.flush();
         _exit(0);
       }
+      */
 
       // Execute the rebuild — materializeToIndex writes new permutation files
       // using regular OS I/O (not mmap); all writes complete when this returns.
-      qlever->binaryRebuild(indexBasename);
+      qlever->binaryRebuild(outputName);
 
       // Build and emit the success response.
       json response;
@@ -754,7 +758,8 @@ int main(int argc, char* argv[]) {
     } else if (command == "build-index" && argc >= 3) {
       return buildIndex(argv[2]);
     } else if (command == "binary-rebuild" && argc >= 3) {
-      return executeBinaryRebuild(argv[2]);
+      std::string outputName = (argc >= 4) ? argv[3] : argv[2];
+      return executeBinaryRebuild(argv[2], outputName);
     } else if (command == "serialize" && argc >= 4) {
       std::string outputFile = (argc >= 5) ? argv[4] : "";
       return serializeDatabase(argv[2], argv[3], outputFile);

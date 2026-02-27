@@ -8,14 +8,12 @@ const IMAGE_NAME = 'qlever-cli:alpine-test';
 
 // Local and container paths
 const LOCAL_E2E_DIR = path.resolve(__dirname);
-const LOCAL_DB_DIR = path.join(LOCAL_E2E_DIR, 'test-db-triples');
+const LOCAL_DB_DIR = path.join(LOCAL_E2E_DIR, 'test-db-triples-no-binary');
 const WORKSPACE_DIR = path.resolve(__dirname, '..');
 // Path inside docker container (mounted to /workspace)
-const CONTAINER_DB_BASE = '/workspace/e2e-cli/test-db-triples/test-index';
-// Working dir inside the container: use the DB dir so temp files
-// (e.g. .tripleBufferForPatterns.dat) are isolated per test suite
-// and don't collide when quads and triples tests run in parallel.
-const CONTAINER_CWD = '/workspace/e2e-cli/test-db-triples';
+const CONTAINER_DB_BASE = '/workspace/e2e-cli/test-db-triples-no-binary/test-index';
+// Working dir inside the container
+const CONTAINER_CWD = '/workspace/e2e-cli/test-db-triples-no-binary';
 
 describe('QLever CLI E2E Flow Triples No Binary', () => {
     beforeAll(() => {
@@ -33,9 +31,9 @@ describe('QLever CLI E2E Flow Triples No Binary', () => {
         // 3. Create the build index config
         const config = {
             index_name: "test-index",
-            index_directory: "/workspace/e2e-cli/test-db-triples",
+            index_directory: CONTAINER_CWD,
             input_files: [
-                { path: "/workspace/e2e-cli/test-db-triples/initial.nt", format: "nt" }
+                { path: path.join(CONTAINER_CWD, 'initial.nt'), format: "nt" }
             ]
         };
         fs.writeFileSync(path.join(LOCAL_DB_DIR, 'build-config.json'), JSON.stringify(config));

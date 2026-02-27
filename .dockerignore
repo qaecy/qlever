@@ -8,3 +8,4 @@
 !CompilationInfo.cmake
 !GitVersion.cmake
 !docker-entrypoint.sh
+!build-alpine
