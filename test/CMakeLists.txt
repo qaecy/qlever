@@ -490,3 +490,7 @@ addLinkAndDiscoverTest(MaterializedViewsTest qlever engine server)
 addLinkAndDiscoverTestNoLibs(ConstexprMapTest)
 
 addLinkAndDiscoverTestNoLibs(ParallelExecutorTest)
+
+addLinkAndDiscoverTestNoLibs(CliUtilsTest cliUtilsLight)
+
+addLinkAndDiscoverTestNoLibs(CliUtilsRdfTest cliUtils)

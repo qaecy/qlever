@@ -1,5 +1,6 @@
 // Consolidated includes
 #include "QueryUtils.h"
+#include "StreamSuppressor.h"
 
 #include <algorithm>
 #include <cctype>
@@ -29,16 +30,9 @@ std::string QueryExecutor::executeConstructQueryToString(
   // QLever always returns CONSTRUCT as Turtle (NT-compatible), so we can use
   // the result directly
   std::string rawResults;
-  // Redirect QLever's verbose logging
-  std::streambuf* clogBuf = std::clog.rdbuf();
-  std::ofstream devNull("/dev/null");
-  std::clog.rdbuf(devNull.rdbuf());
-  try {
+  {
+    cli_utils::SuppressStreams suppress;
     rawResults = qlever_->query(query, ad_utility::MediaType::turtle);
-    std::clog.rdbuf(clogBuf);
-  } catch (...) {
-    std::clog.rdbuf(clogBuf);
-    throw;
   }
   // If nq is requested, we need to convert each line to N-Quads (add default
   // graph)
@@ -62,7 +56,7 @@ std::string QueryExecutor::executeConstructQueryToString(
 }
 
 QueryExecutor::QueryExecutor(std::shared_ptr<qlever::QleverCliContext> qlever)
-    : qlever_(qlever) {}
+    : qlever_(std::move(qlever)) {}
 
 std::string QueryExecutor::executeQuery(const std::string& query,
                                         const std::string& format) {
@@ -80,19 +74,8 @@ std::string QueryExecutor::executeQuery(const std::string& query,
     mediaType = ad_utility::MediaType::sparqlJson;  // default
   }
 
-  // Redirect QLever's verbose logging to /dev/null during query execution
-  std::streambuf* clogBuf = std::clog.rdbuf();
-  std::ofstream devNull("/dev/null");
-  std::clog.rdbuf(devNull.rdbuf());
-
-  try {
-    std::string result = qlever_->query(query, mediaType);
-    std::clog.rdbuf(clogBuf);  // Restore logging
-    return result;
-  } catch (...) {
-    std::clog.rdbuf(clogBuf);  // Restore logging even on exception
-    throw;
-  }
+  cli_utils::SuppressStreams suppress;
+  return qlever_->query(query, mediaType);
 }
 
 void QueryExecutor::executeConstructQuery(const std::string& query,
@@ -116,19 +99,9 @@ void QueryExecutor::executeConstructQuery(const std::string& query,
 
   // Execute query to get raw RDF results
   std::string rawResults;
-  try {
-    // Redirect QLever's verbose logging
-    std::streambuf* clogBuf = std::clog.rdbuf();
-    std::ofstream devNull("/dev/null");
-    std::clog.rdbuf(devNull.rdbuf());
-
-    // Use turtle format - QLever's native CONSTRUCT output format
+  {
+    cli_utils::SuppressStreams suppress;
     rawResults = qlever_->query(query, ad_utility::MediaType::turtle);
-
-    std::clog.rdbuf(clogBuf);  // Restore logging
-  } catch (const std::exception& e) {
-    throw std::runtime_error("Query execution failed: " +
-                             std::string(e.what()));
   }
 
   // Process results line by line

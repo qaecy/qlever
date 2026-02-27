@@ -39,6 +39,9 @@ WORKDIR /qlever/build/
 RUN sed -i 's/qlever_target_link_libraries(qlever-index qlever index/qlever_target_link_libraries(qlever-index index/' ../CMakeLists.txt && \
     cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" -GNinja ..
 RUN cmake --build . --target qlever-cli qlever-index
+RUN cmake --build . --target CliUtilsTest CliUtilsRdfTest && \
+    ./test/CliUtilsTest && \
+    ./test/CliUtilsRdfTest
 
 # Runtime stage - very minimal Alpine
 FROM alpine:3.22 AS runtime

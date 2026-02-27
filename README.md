@@ -121,6 +121,14 @@ docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" q
 ### Qlever shortcomings
 - Doesn't support RDF* or RDF 1.2 yet (https://github.com/ad-freiburg/qlever/issues/2169). Won't even load an NQuads file that has RDF* in it.
 
+## Testing
+
+Tests are compiled and executed as part of the normal Alpine build. The build fails if any test fails:
+
+```bash
+docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
+```
+
 ## Merge main repo
 ```bash
 git remote add upstream https://github.com/ad-freiburg/qlever.git
