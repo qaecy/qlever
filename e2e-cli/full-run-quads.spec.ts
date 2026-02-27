@@ -142,6 +142,41 @@ describe('QLever CLI E2E Flow Quads', { timeout: 120000 }, () => {
         expect(lines).toContain('http://example.org/inserted,http://example.org/p,http://example.org/o');
     });
 
+    it('should add a triple via SPARQL UPDATE', () => {
+        const updateQuery = 'INSERT DATA { GRAPH <http://example.org/g3> { <http://example.org/s3> <http://example.org/p3> <http://example.org/o3> } }';
+        const out = execDocker(`/qlever/qlever-cli update ${CONTAINER_DB_BASE} "${updateQuery}"`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+
+        // Verify
+        const verifyOut = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s WHERE { GRAPH <http://example.org/g3> { ?s ?p ?o } }" csv`);
+        expect(verifyOut).toContain('http://example.org/s3');
+    });
+
+    it('should delete a triple via SPARQL UPDATE', () => {
+        const updateQuery = 'DELETE DATA { GRAPH <http://example.org/g3> { <http://example.org/s3> <http://example.org/p3> <http://example.org/o3> } }';
+        const out = execDocker(`/qlever/qlever-cli update ${CONTAINER_DB_BASE} "${updateQuery}"`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+
+        // Verify
+        const verifyOut = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s WHERE { GRAPH <http://example.org/g3> { ?s ?p ?o } }" csv`);
+        const lines = verifyOut.trim().split('\n');
+        expect(lines.length).toBe(1); // Only header
+    });
+
+    it('should write a triple and specify graph using a flag', () => {
+        const triple = '<http://example.org/s4> <http://example.org/p4> <http://example.org/o4> .\n';
+        // Note: using nt format since nq would specify graph in-line
+        const out = execDocker(`/qlever/qlever-cli write ${CONTAINER_DB_BASE} nt - --graph http://example.org/g4`, triple);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+
+        // Verify
+        const verifyOut = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s WHERE { GRAPH <http://example.org/g4> { ?s ?p ?o } }" csv`);
+        expect(verifyOut).toContain('http://example.org/s4');
+    });
+
     it('should execute binary-rebuild successfully', () => {
         const out = execDocker(`/qlever/qlever-cli binary-rebuild ${CONTAINER_DB_BASE} ${CONTAINER_DB_BASE}.rebuilt`);
         const result = JSON.parse(out);
@@ -152,8 +187,9 @@ describe('QLever CLI E2E Flow Quads', { timeout: 120000 }, () => {
     it('should still have the correct data after binary-rebuild', () => {
         const out = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE}.rebuilt "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
         const lines = out.trim().split('\n');
-        // Header + inserted = 2 lines (since initial was deleted before rebuild)
-        expect(lines.length).toBe(2);
+        // Header + inserted + s4 = 3 lines (since initial was deleted before rebuild)
+        expect(lines.length).toBe(3);
         expect(lines).toContain('http://example.org/inserted,http://example.org/p,http://example.org/o');
+        expect(lines).toContain('http://example.org/s4,http://example.org/p4,http://example.org/o4');
     });
 });
