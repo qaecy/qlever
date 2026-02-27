@@ -10,6 +10,7 @@
 
 #include "engine/ExecuteUpdate.h"
 #include "engine/ExportQueryExecutionTrees.h"
+#include "engine/LocalVocab.h"
 #include "engine/MaterializedViews.h"
 #include "engine/NamedResultCache.h"
 #include "engine/QueryExecutionContext.h"
@@ -17,10 +18,12 @@
 #include "engine/SortPerformanceEstimator.h"
 #include "global/Constants.h"
 #include "global/Id.h"
+#include "global/IdTriple.h"
 #include "global/RuntimeParameters.h"
 #include "index/DeltaTriples.h"
 #include "index/Index.h"
 #include "index/IndexImpl.h"
+#include "index/IndexRebuilder.h"
 #include "index/TextIndexBuilder.h"
 #include "libqlever/Qlever.h"
 #include "libqlever/QleverTypes.h"
@@ -135,6 +138,57 @@ class QleverCliContext {
             }));
   }
 
+  const Index::Vocab& getVocab() const { return index_.getVocab(); }
+
+  const EncodedIriManager& encodedIriManager() const {
+    return index_.encodedIriManager();
+  }
+
+  void insertTriples(const std::vector<IdTriple<0>>& triples,
+                     LocalVocab localVocab) {
+    auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
+    auto localVocabPtr = std::make_shared<LocalVocab>(std::move(localVocab));
+    index_.deltaTriplesManager().modify<void>(
+        std::function<void(DeltaTriples&)>(
+            [handle, triples,
+             localVocabPtr](DeltaTriples& deltaTriples) mutable {
+              deltaTriples.insertTriples(handle, triples);
+            }));
+  }
+
+  void deleteTriples(const std::vector<IdTriple<0>>& triples,
+                     LocalVocab localVocab) {
+    auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
+    auto localVocabPtr = std::make_shared<LocalVocab>(std::move(localVocab));
+    index_.deltaTriplesManager().modify<void>(
+        std::function<void(DeltaTriples&)>(
+            [handle, triples,
+             localVocabPtr](DeltaTriples& deltaTriples) mutable {
+              deltaTriples.deleteTriples(handle, triples);
+            }));
+  }
+
+  void binaryRebuild(const std::string& indexBaseName) {
+    auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
+    auto logFileName = indexBaseName + ".rebuild-index-log.txt";
+    auto [currentSnapshot, localVocabCopy, ownedBlocks] =
+        index_.deltaTriplesManager()
+            .getCurrentLocatedTriplesSharedStateWithVocab();
+    qlever::materializeToIndex(index_.getImpl(), indexBaseName, currentSnapshot,
+                               localVocabCopy, ownedBlocks, handle,
+                               logFileName);
+  }
+
+  // Return the current delta triple counts (inserted, deleted).
+  // Used by executeBinaryRebuild to skip the rebuild when there are no changes.
+  DeltaTriplesCount getDeltaCounts() {
+    return index_.deltaTriplesManager().modify<DeltaTriplesCount>(
+        std::function<DeltaTriplesCount(DeltaTriples&)>(
+            [](DeltaTriples& dt) { return dt.getCounts(); }),
+        /*writeToDiskAfterRequest=*/false,
+        /*updateMetadataAfterRequest=*/false);
+  }
+
   void queryAndPinResultWithName(
       QueryExecutionContext::PinResultWithName options, std::string queryStr) {
     auto queryPlan = parseAndPlanQuery(std::move(queryStr));
@@ -176,7 +230,9 @@ class QleverCliContext {
   }
 
   static void buildIndex(IndexBuilderConfig config) {
-    Index index{ad_utility::makeUnlimitedAllocator<Id>()};
+    auto indexPtr =
+        std::make_unique<Index>(ad_utility::makeUnlimitedAllocator<Id>());
+    Index& index = *indexPtr;
 
     if (config.memoryLimit_.has_value()) {
       index.memoryLimitIndexBuilding() = config.memoryLimit_.value();
@@ -184,6 +240,13 @@ class QleverCliContext {
     if (config.parserBufferSize_.has_value()) {
       index.parserBufferSize() = config.parserBufferSize_.value();
     }
+    index.setOnDiskBase(config.baseName_);
+    index.setKeepTempFiles(config.keepTemporaryFiles_);
+    index.setSettingsFile(config.settingsFile_);
+    index.loadAllPermutations() = !config.onlyPsoAndPos_;
+    index.getImpl().setVocabularyTypeForIndexBuilding(config.vocabType_);
+    index.getImpl().setPrefixesForEncodedValues(
+        config.prefixesForIdEncodedIris_);
 
     if (config.textIndexName_.empty() && !config.wordsfile_.empty()) {
       config.textIndexName_ =
@@ -193,13 +256,6 @@ class QleverCliContext {
     index.setKbName(config.kbIndexName_);
     index.setTextName(config.textIndexName_);
     index.usePatterns() = !config.noPatterns_;
-    index.setOnDiskBase(config.baseName_);
-    index.setKeepTempFiles(config.keepTemporaryFiles_);
-    index.setSettingsFile(config.settingsFile_);
-    index.loadAllPermutations() = !config.onlyPsoAndPos_;
-    index.getImpl().setVocabularyTypeForIndexBuilding(config.vocabType_);
-    index.getImpl().setPrefixesForEncodedValues(
-        config.prefixesForIdEncodedIris_);
 
     if (!config.onlyAddTextIndex_) {
       AD_CONTRACT_CHECK(!config.inputFiles_.empty());
@@ -212,7 +268,8 @@ class QleverCliContext {
           ad_utility::makeUnlimitedAllocator<Id>(), index.getOnDiskBase());
       textIndexBuilder.buildTextIndexFile(
           config.wordsAndDocsFileSpecified()
-              ? std::optional{std::pair{config.wordsfile_, config.docsfile_}}
+              ? std::make_optional(
+                    std::make_pair(config.wordsfile_, config.docsfile_))
               : std::nullopt,
           config.addWordsFromLiterals_, config.textScoringMetric_,
           {config.bScoringParam_, config.kScoringParam_});

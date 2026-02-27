@@ -1,0 +1,13 @@
+{
+    "name": "qlever-e2e-cli",
+    "version": "1.0.0",
+    "description": "E2E tests for QLever CLI",
+    "scripts": {
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "typescript": "^5.0.0",
+        "vitest": "^1.0.0"
+    }
+}

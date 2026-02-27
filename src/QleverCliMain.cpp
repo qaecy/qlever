@@ -1,4 +1,7 @@
+#include <unistd.h>
+
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -11,10 +14,13 @@
 #include "cli-utils/QueryUtils.h"
 #include "cli-utils/RdfOutputUtils.h"
 #include "engine/ExecuteUpdate.h"
+#include "engine/LocalVocab.h"
 #include "engine/QueryPlanner.h"
 #include "index/InputFileSpecification.h"
 #include "index/vocabulary/VocabularyType.h"
+#include "parser/RdfParser.h"
 #include "parser/SparqlParser.h"
+#include "parser/TokenizerCtre.h"
 #include "util/Log.h"
 #include "util/MemorySize/MemorySize.h"
 #include "util/Timer.h"
@@ -106,8 +112,16 @@ void printUsage(const char* programName) {
   // from JSON input\n";
   std::cerr << "  update      <index_basename> <sparql_update_query>  Execute "
                "SPARQL UPDATE query\n";
+  std::cerr
+      << "  write       <index_basename> <format> <input_file> [default_graph] "
+         " Execute write from stream (use '-' for stdin)\n";
+  std::cerr
+      << "  delete      <index_basename> <format> <input_file> [default_graph] "
+         " Execute delete from stream (use '-' for stdin)\n";
   std::cerr << "  stats       <index_basename>                  Get index "
                "statistics\n";
+  std::cerr << "  binary-rebuild <index_basename>               Merge delta "
+               "triples into main index\n";
   std::cerr << "  build-index <json_input>                      Build index "
                "from RDF files\n";
   std::cerr << "  serialize   <index_basename> <format> [output_file]  Dump "
@@ -329,12 +343,23 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
       }
     }
 
-    // Redirect QLever's verbose logging to /dev/null during query execution
+    // Redirect QLever's verbose logging to /dev/null during query execution.
+    // Use RAII to guarantee the original rdbuf is restored even if an exception
+    // is thrown — otherwise the catch block would write through a dangling
+    // streambuf pointer after devNull goes out of scope.
     std::streambuf* clogBuf = std::clog.rdbuf();
     std::streambuf* cerrBuf = std::cerr.rdbuf();
     std::ofstream devNull("/dev/null");
     std::clog.rdbuf(devNull.rdbuf());
     std::cerr.rdbuf(devNull.rdbuf());
+    struct RestoreStreams {
+      std::streambuf* clogBuf_;
+      std::streambuf* cerrBuf_;
+      ~RestoreStreams() {
+        std::clog.rdbuf(clogBuf_);
+        std::cerr.rdbuf(cerrBuf_);
+      }
+    } restorer{clogBuf, cerrBuf};
 
     // Load index
     qlever::EngineConfig config;
@@ -349,14 +374,7 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
       // Workaround for QLever PREFIX bug: strip PREFIX declarations and expand
       // prefixed terms before execution
 
-      // Debug: log before processing (to stdout, since stderr is redirected)
-      std::cout << "DEBUG: About to process query" << std::endl;
-
       std::string processedQuery = stripPrefixesAndExpand(queryStr);
-
-      // Debug: log the processed query to stdout
-      std::cout << "DEBUG: Original query:\n" << queryStr << std::endl;
-      std::cout << "DEBUG: Processed query:\n" << processedQuery << std::endl;
 
       // For CONSTRUCT and DESCRIBE, use the construct executor
       // (no file output, just return as string)
@@ -371,13 +389,12 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
       qlever->queryAndPinResultWithName(name, queryStr);
     }
 
-    // Restore logging
-    std::clog.rdbuf(clogBuf);
-    std::cerr.rdbuf(cerrBuf);
-
+    // restorer destructor will restore clog/cerr here.
     std::cout << result << std::endl;
     return 0;
   } catch (const std::exception& e) {
+    // std::clog/cerr are already restored by restorer's destructor at this
+    // point (it runs when the try block's scope unwinds).
     json errorResponse = createErrorResponse(e.what());
     std::cerr << errorResponse.dump(2) << std::endl;
     return 1;
@@ -409,6 +426,104 @@ int executeUpdate(const std::string& indexBasename,
   }
 }
 
+int executeWriteOrDelete(const std::string& indexBasename,
+                         const std::string& format,
+                         const std::string& inputFile, bool isDelete,
+                         const std::string& defaultGraph = "") {
+  try {
+    // Determine filetype
+    qlever::Filetype filetype;
+    if (format == "ttl" || format == "turtle" || format == "nt") {
+      filetype = qlever::Filetype::Turtle;
+    } else if (format == "nq") {
+      filetype = qlever::Filetype::NQuad;
+    } else {
+      throw std::runtime_error("Unsupported format for " +
+                               std::string(isDelete ? "delete" : "write") +
+                               ": " + format + ". Use ttl, nt, or nq.");
+    }
+
+    std::string actualInputFile = (inputFile == "-") ? "/dev/stdin" : inputFile;
+    // Load index
+    qlever::EngineConfig config;
+    config.baseName_ = indexBasename;
+    config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
+
+    auto qlever = std::make_shared<qlever::QleverCliContext>(config);
+
+    // Setup default graph ID. Use the IRI string instead of specialIds() to
+    // ensure it matches correctly when resolving against the vocabulary/local
+    // vocab.
+    TripleComponent defaultGraphTc =
+        TripleComponent{ad_utility::triple_component::Iri::fromIriref(
+            std::string(DEFAULT_GRAPH_IRI))};
+    if (!defaultGraph.empty() && defaultGraph != "-") {
+      defaultGraphTc =
+          TripleComponent{ad_utility::triple_component::Iri::fromIriref(
+              "<" + defaultGraph + ">")};
+    }
+
+    // Instantiate parser
+    std::unique_ptr<RdfParserBase> parser;
+    if (filetype == qlever::Filetype::NQuad) {
+      parser = std::make_unique<RdfStreamParser<NQuadParser<TokenizerCtre>>>(
+          actualInputFile, &qlever->encodedIriManager(),
+          DEFAULT_PARSER_BUFFER_SIZE, std::move(defaultGraphTc));
+    } else {
+      parser = std::make_unique<RdfStreamParser<TurtleParser<TokenizerCtre>>>(
+          actualInputFile, &qlever->encodedIriManager(),
+          DEFAULT_PARSER_BUFFER_SIZE, std::move(defaultGraphTc));
+    }
+
+    // We need a LocalVocab to keep newly seen vocab entries for DeltaTriples
+    LocalVocab localVocab;
+    const auto& vocab = qlever->getVocab();
+    const auto& encodedIriManager = qlever->encodedIriManager();
+
+    size_t totalProcessed = 0;
+    while (auto batchOpt = parser->getBatch()) {
+      auto& batch = batchOpt.value();
+      if (batch.empty()) continue;
+
+      std::vector<IdTriple<0>> idTriples;
+      idTriples.reserve(batch.size());
+
+      for (auto& turtleTriple : batch) {
+        Id sId = std::move(turtleTriple.subject_)
+                     .toValueId(vocab, localVocab, encodedIriManager);
+        Id pId = std::move(turtleTriple.predicate_)
+                     .toValueId(vocab, localVocab, encodedIriManager);
+        Id oId = std::move(turtleTriple.object_)
+                     .toValueId(vocab, localVocab, encodedIriManager);
+        Id gId = std::move(turtleTriple.graphIri_)
+                     .toValueId(vocab, localVocab, encodedIriManager);
+
+        idTriples.push_back(IdTriple<0>{std::array{sId, pId, oId, gId}});
+      }
+
+      if (isDelete) {
+        qlever->deleteTriples(std::move(idTriples), std::move(localVocab));
+      } else {
+        qlever->insertTriples(std::move(idTriples), std::move(localVocab));
+      }
+
+      // Reset localVocab for the next batch
+      localVocab = LocalVocab{};
+      totalProcessed += batch.size();
+    }
+
+    json response = createSuccessResponse(
+        (isDelete ? std::string("Deleted ") : std::string("Inserted ")) +
+        std::to_string(totalProcessed) + " triples successfully.");
+    std::cout << response.dump() << std::endl;
+    return 0;
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    std::cout << errorResponse.dump() << std::endl;
+    return 1;
+  }
+}
+
 int serializeDatabase(const std::string& indexBasename,
                       const std::string& format,
                       const std::string& outputFile = "") {
@@ -433,7 +548,7 @@ int serializeDatabase(const std::string& indexBasename,
       std::cerr << response.dump(2) << std::endl;
     }
 
-    return 0;
+    _exit(0);
   } catch (const std::exception& e) {
     json errorResponse = createErrorResponse(e.what());
     std::cerr << errorResponse.dump(2) << std::endl;
@@ -447,7 +562,11 @@ int buildIndex(const std::string& jsonInput) {
     json response = cli_utils::IndexBuilder::buildIndex(input);
 
     std::cout << response.dump() << std::endl;
-    return response["success"].get<bool>() ? 0 : 1;
+    std::cout.flush();
+    std::cerr.flush();
+    // Use _exit to bypass potentially hanging destructors from background
+    // threads in the Index that may not join cleanly after index build.
+    _exit(0);
 
   } catch (const json::parse_error& e) {
     json response =
@@ -532,16 +651,67 @@ int executeQueryToFile(const std::string& indexBasename,
   }
 }
 
-int main(int argc, char* argv[]) {
-  // DEBUG: Very early output to confirm execution
-  std::cout << "DEBUG: main() called with " << argc << " arguments"
-            << std::endl;
-  std::cout << "DEBUG: command line: ";
-  for (int i = 0; i < argc; ++i) {
-    std::cout << argv[i] << " ";
-  }
-  std::cout << std::endl;
+int executeBinaryRebuild(const std::string& indexBasename) {
+  try {
+    {
+      qlever::EngineConfig config;
+      config.baseName_ = indexBasename;
+      config.memoryLimit_ = ad_utility::MemorySize::gigabytes(4);
 
+      auto qlever = std::make_shared<qlever::QleverCliContext>(config);
+
+      // Check if there are any delta triples. If not, the rebuild is a no-op.
+      auto deltaCounts = qlever->getDeltaCounts();
+      if (deltaCounts.triplesInserted_ == 0 &&
+          deltaCounts.triplesDeleted_ == 0) {
+        json response;
+        response["success"] = true;
+        response["skipped"] = true;
+        response["message"] =
+            "Binary rebuild not necessary: no delta triples to materialize.";
+        response["indexBasename"] = indexBasename;
+        response["timestamp"] =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        std::cout << response.dump() << std::endl;
+        std::cout.flush();
+        _exit(0);
+      }
+
+      // Execute the rebuild — materializeToIndex writes new permutation files
+      // using regular OS I/O (not mmap); all writes complete when this returns.
+      qlever->binaryRebuild(indexBasename);
+
+      // Build and emit the success response.
+      json response;
+      response["success"] = true;
+      response["message"] = "Binary rebuild completed successfully.";
+      response["indexBasename"] = indexBasename;
+      response["timestamp"] =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count();
+      std::cout << response.dump() << std::endl;
+      std::cout.flush();
+
+      // _exit(0) here — inside the scope, BEFORE the QleverCliContext
+      // destructor runs. The destructor hangs due to background
+      // DeltaTriplesManager threads. The new permutation files are already
+      // fully written (above). The old index's read-only mmaps are safely
+      // cleaned up by the OS on process exit.
+      _exit(0);
+    }
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    errorResponse["command"] = "binary-rebuild";
+    errorResponse["indexBasename"] = indexBasename;
+    std::cout << errorResponse.dump() << std::endl;
+    return 1;
+  }
+}
+
+int main(int argc, char* argv[]) {
   // Redirect QLever logging to stderr so only JSON goes to stdout
   ad_utility::setGlobalLoggingStream(&std::cerr);
 
@@ -551,37 +721,46 @@ int main(int argc, char* argv[]) {
   }
 
   std::string command = argv[1];
-  std::cout << "DEBUG: command = " << command << std::endl;
 
   // Handle help flags
   if (command == "--help" || command == "-h" || command == "help") {
     printUsage(argv[0]);
+    std::cout.flush();
+    std::cerr.flush();
     return 0;
   }
 
   try {
-    if (command == "query" && (argc == 4 || argc == 5 || argc == 6)) {
+    if (command == "query" && argc >= 4) {
       // query <index_basename> <sparql_query> [format] [name]
       std::string format = (argc >= 5) ? argv[4] : "";
-      std::string name = (argc == 6) ? argv[5] : "";
+      std::string name = (argc >= 6) ? argv[5] : "";
       return executeQuery(argv[2], argv[3], format, name);
-    } else if (command == "update" && argc == 4) {
+    } else if (command == "update" && argc >= 4) {
       // update <index_basename> <sparql_update_query>
       return executeUpdate(argv[2], argv[3]);
-    } else if (command == "query-to-file" && argc == 6) {
+    } else if (command == "write" && argc >= 5) {
+      std::string defaultGraph = (argc >= 6) ? argv[5] : "";
+      return executeWriteOrDelete(argv[2], argv[3], argv[4], false,
+                                  defaultGraph);
+    } else if (command == "delete" && argc >= 5) {
+      std::string defaultGraph = (argc >= 6) ? argv[5] : "";
+      return executeWriteOrDelete(argv[2], argv[3], argv[4], true,
+                                  defaultGraph);
+    } else if (command == "query-to-file" && argc >= 6) {
       return executeQueryToFile(argv[2], argv[3], argv[4], argv[5]);
-    }
-    // else if (command == "query-json" && argc == 3) {
-    //     return executeJsonQuery(argv[2]);
-    // }
-    else if (command == "stats" && argc == 3) {
+    } else if (command == "stats" && argc >= 3) {
       return getIndexStats(argv[2]);
-    } else if (command == "build-index" && argc == 3) {
+    } else if (command == "build-index" && argc >= 3) {
       return buildIndex(argv[2]);
-    } else if (command == "serialize" && (argc == 4 || argc == 5)) {
-      std::string outputFile = (argc == 5) ? argv[4] : "";
+    } else if (command == "binary-rebuild" && argc >= 3) {
+      return executeBinaryRebuild(argv[2]);
+    } else if (command == "serialize" && argc >= 4) {
+      std::string outputFile = (argc >= 5) ? argv[4] : "";
       return serializeDatabase(argv[2], argv[3], outputFile);
     } else {
+      std::cerr << "Unrecognized command or wrong number of arguments: "
+                << command << " (argc=" << argc << ")" << std::endl;
       printUsage(argv[0]);
       return 1;
     }

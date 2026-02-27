@@ -1,0 +1,3 @@
+node_modules
+test-db-quads/test-index*
+test-db-triples/test-index*

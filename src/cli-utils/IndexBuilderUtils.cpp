@@ -108,6 +108,13 @@ std::string IndexBuilder::processInputFiles(
   for (const auto& inputFile : inputFiles) {
     qlever::InputFileSpecification spec;
     spec.filetype_ = qlever::Filetype::Turtle;  // default
+    // Explicitly opt out of parallel parsing. If this flag is not set, a
+    // single-file build silently enables the parallel parser for backward
+    // compatibility (see IndexImpl::updateInputFileSpecificationsAndLog).
+    // The parallel parser can deadlock/stall inside Docker on Alpine, causing
+    // the e2e index-build step to hang until the timeout is reached.
+    spec.parseInParallel_ = false;
+    spec.parseInParallelSetExplicitly_ = true;
 
     if (inputFile.is_string()) {
       spec.filename_ = inputFile.get<std::string>();

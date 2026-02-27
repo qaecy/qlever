@@ -144,6 +144,7 @@ git merge upstream/master
 ## Build
 
 Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`
+Alpine image staged: `docker compose -f docker-compose.cli-alpine.yml up`
 Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
 Debian image: `docker build -f Dockerfiles/Dockerfile.cli-only.debian -t qlever-cli:debian .`
 

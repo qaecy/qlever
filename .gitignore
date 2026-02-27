@@ -1,5 +1,6 @@
 # Build directory
 build/
+build-alpine/
 cmake-build*
 
 # End-to-End data

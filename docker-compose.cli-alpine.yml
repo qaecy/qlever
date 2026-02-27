@@ -1,0 +1,28 @@
+services:
+  # Incremental build service: mounts source + build dir as volumes.
+  # Requires the qlever-builder:alpine image (build it once with:
+  #   docker build --target builder -t qlever-builder:alpine \
+  #     -f Dockerfiles/Dockerfile.cli-only.alpine .
+  # ).
+  builder:
+    image: qlever-builder:alpine
+    volumes:
+      - .:/qlever
+      - ./build-alpine:/qlever/build
+    working_dir: /qlever/build
+    user: root
+    command: >
+      /bin/sh -c "
+        cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO
+              -DCMAKE_CXX_FLAGS='-Wno-psabi -Wno-non-template-friend' ..
+        && ninja -j$(nproc) qlever-cli qlever-index
+      "
+
+  # Packages the locally-built binaries into a slim Alpine runtime image
+  # tagged as qlever-cli:alpine-test (used by the e2e test suite).
+  # Run after 'builder' has produced ./build-alpine/qlever-cli.
+  image-builder:
+    build:
+      context: .
+      dockerfile: Dockerfiles/Dockerfile.cli-test-image
+    image: qlever-cli:alpine-test

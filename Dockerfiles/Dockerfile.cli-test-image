@@ -1,0 +1,32 @@
+# Lightweight runtime image for e2e testing.
+# Expects the binaries to already be built in ./build-alpine (via the
+# docker-compose.cli-alpine.yml 'builder' service or a local Alpine build).
+FROM alpine:3.22 AS runtime
+LABEL maintainer="QLever CLI"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+WORKDIR /qlever
+
+# Install runtime dependencies only (no build tools).
+RUN apk add --no-cache \
+    libstdc++ \
+    libgcc \
+    icu-libs \
+    openssl \
+    zstd-libs \
+    zlib \
+    jemalloc \
+    boost-program_options \
+    boost-iostreams \
+    boost-system \
+    boost-url
+
+# Copy the pre-built binaries from the local build directory.
+COPY build-alpine/qlever-cli  /qlever/qlever-cli
+COPY build-alpine/qlever-index /qlever/qlever-index
+
+RUN chmod +x /qlever/qlever-cli /qlever/qlever-index
+
+ENTRYPOINT ["/qlever/qlever-cli"]

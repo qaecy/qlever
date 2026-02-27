@@ -1,0 +1,6 @@
+FROM alpine:3.22
+RUN apk add --no-cache libstdc++ libgcc icu-libs openssl zstd-libs zlib jemalloc boost-program_options boost-iostreams boost-system boost-url
+COPY build/qlever-cli /qlever/qlever-cli
+COPY build/qlever-index /qlever/qlever-index
+RUN chmod +x /qlever/qlever-cli /qlever/qlever-index
+# No entrypoint, allow running shell commands directly
