@@ -1,4 +1,5 @@
 #include "RdfOutputUtils.h"
+#include "StreamSuppressor.h"
 
 #include <zlib.h>
 
@@ -56,12 +57,11 @@ bool GzipOutputStream::isOpen() const { return gzFile_ != nullptr; }
 // =============================================================================
 
 ProgressTracker::ProgressTracker(std::chrono::seconds interval)
-    : progressInterval_(interval), totalItems_(0) {}
+    : progressInterval_(interval) {}
 
 void ProgressTracker::start() {
   startTime_ = std::chrono::steady_clock::now();
   lastProgressTime_ = startTime_;
-  totalItems_ = 0;
 }
 
 bool ProgressTracker::shouldLog() const {
@@ -212,8 +212,21 @@ std::string formatQuad(const std::string& subject, const std::string& predicate,
 
 std::string escapeForFormat(const std::string& value,
                             const std::string& /* format */) {
-  // For now, return as-is. Could add proper escaping later if needed.
-  return value;
+  // Escape special characters for N-Triples / N-Quads string literals.
+  // Only applies to the content of string literals (not URIs or bnodes).
+  std::string out;
+  out.reserve(value.size());
+  for (char c : value) {
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"':  out += "\\\""; break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      default:   out += c;      break;
+    }
+  }
+  return out;
 }
 
 bool isGzipFile(const std::string& filename) {
@@ -313,32 +326,27 @@ void DatabaseSerializer::serialize(const std::string& format,
   std::string batchBuffer;
   batchBuffer.reserve(BATCH_SIZE * 200);  // Estimate ~200 chars per triple
 
-  // Setup logging suppression for QLever's verbose query messages
-  std::ofstream nullStream("/dev/null");
-  std::streambuf* originalCerrBuf = std::cerr.rdbuf();
-
   while (true) {
     // Construct batch query with large LIMIT and OFFSET
     std::string sparqlQuery;
     if (format == "nq") {
       sparqlQuery =
-          "SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT " +
+          "SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } "
+          "ORDER BY ?g ?s ?p ?o LIMIT " +
           std::to_string(BATCH_SIZE) + " OFFSET " + std::to_string(offset);
     } else {
-      sparqlQuery = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT " +
+      sparqlQuery = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } "
+                    "ORDER BY ?s ?p ?o LIMIT " +
                     std::to_string(BATCH_SIZE) + " OFFSET " +
                     std::to_string(offset);
     }
 
-    // Temporarily redirect QLever's logging to suppress verbose messages
-    std::cerr.rdbuf(nullStream.rdbuf());
-
-    // Execute batch query
-    std::string result =
-        qlever_->query(sparqlQuery, ad_utility::MediaType::sparqlJson);
-
-    // Restore original logging
-    std::cerr.rdbuf(originalCerrBuf);
+    // Execute batch query (suppress QLever's verbose logging)
+    std::string result;
+    {
+      cli_utils::SuppressStreams suppress;
+      result = qlever_->query(sparqlQuery, ad_utility::MediaType::sparqlJson);
+    }
 
     // Parse the JSON result
     nlohmann::json queryResult = nlohmann::json::parse(result);
@@ -348,7 +356,7 @@ void DatabaseSerializer::serialize(const std::string& format,
       break;  // No more results
     }
 
-    auto bindings = queryResult["results"]["bindings"];
+    const auto& bindings = queryResult["results"]["bindings"];
     if (bindings.empty()) {
       break;  // No more results
     }

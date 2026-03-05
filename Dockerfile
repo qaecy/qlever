@@ -13,7 +13,7 @@ FROM base AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y wget
 RUN wget https://apt.kitware.com/kitware-archive.sh && chmod +x kitware-archive.sh && ./kitware-archive.sh
-RUN apt-get update && apt-get install -y build-essential cmake libicu-dev tzdata pkg-config uuid-runtime uuid-dev git libjemalloc-dev ninja-build libzstd-dev libssl-dev libboost1.83-dev libboost-program-options1.83-dev libboost-iostreams1.83-dev libboost-url1.83-dev libboost-container1.83-dev
+RUN apt-get update && apt-get install -y build-essential cmake libicu-dev tzdata pkg-config uuid-runtime uuid-dev git libjemalloc-dev ninja-build libzstd-dev libssl-dev zlib1g-dev libboost1.83-dev libboost-program-options1.83-dev libboost-iostreams1.83-dev libboost-url1.83-dev libboost-container1.83-dev
 
 # Copy everything we need to build the binaries.
 #
@@ -34,13 +34,16 @@ COPY GitVersion.cmake /qlever/
 # to, build the image with `--build-arg RUN_TESTS=false`.
 # `-DCOMPILER_SUPPORTS_MARCH_NATIVE=FALSE` prevents fsst from compiling with
 # `-march=native`.
+# Use `--build-arg BUILD_JOBS=2` to limit parallel compilation (default: all cores).
 ARG RUN_TESTS=true
+ARG BUILD_JOBS=0
 WORKDIR /qlever/build/
 RUN cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DUSE_PARALLEL=true -D_NO_TIMING_TESTS=ON -DCOMPILER_SUPPORTS_MARCH_NATIVE=FALSE -GNinja ..
-RUN if [ "$RUN_TESTS" = "true" ]; then \
-      cmake --build . && ctest --rerun-failed --output-on-failure; \
+RUN if [ "$BUILD_JOBS" = "0" ]; then JOBS=$(nproc); else JOBS=$BUILD_JOBS; fi && \
+    if [ "$RUN_TESTS" = "true" ]; then \
+      cmake --build . -- -j$JOBS && ctest --rerun-failed --output-on-failure; \
     else \
-      cmake --build . --target qlever-index qlever-server && echo "Skipping tests"; \
+      cmake --build . --target qlever-index qlever-server -- -j$JOBS && echo "Skipping tests"; \
     fi
 
 # Install the packages needed for the final image.

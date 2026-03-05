@@ -171,8 +171,8 @@ std::string IndexBuilder::processOptionalParameters(
     if (memoryLimitGb <= 0) {
       return "memory_limit_gb must be positive";
     }
-    config.memoryLimit_ =
-        ad_utility::MemorySize::gigabytes(static_cast<size_t>(memoryLimitGb));
+    config.memoryLimit_ = ad_utility::MemorySize::bytes(
+        static_cast<size_t>(memoryLimitGb * 1024.0 * 1024.0 * 1024.0));
   }
 
   // Settings file
