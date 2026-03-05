@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "cli-utils/QueryTypeDetect.h"
 #include "cli-utils/StreamSuppressor.h"
 #include "util/MemorySize/MemorySize.h"
 
@@ -445,4 +446,123 @@ TEST(QleverCliContextContract, IsNotCopyAssignable) {
   static_assert(!std::is_copy_assignable_v<qlever::QleverCliContext>,
                 "QleverCliContext must not be copy-assignable (C3)");
   SUCCEED();
+}
+
+// ============================================================
+// L1 – detectQueryType: skip PREFIX/BASE/comments
+// ============================================================
+
+TEST(DetectQueryType, SimpleSelect) {
+  EXPECT_EQ(cli_utils::detectQueryType("SELECT * WHERE { ?s ?p ?o }"),
+            "SELECT");
+}
+
+TEST(DetectQueryType, SimpleConstruct) {
+  EXPECT_EQ(cli_utils::detectQueryType("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }"),
+            "CONSTRUCT");
+}
+
+TEST(DetectQueryType, SimpleDescribe) {
+  EXPECT_EQ(cli_utils::detectQueryType("DESCRIBE <http://example.org>"),
+            "DESCRIBE");
+}
+
+TEST(DetectQueryType, SimpleAsk) {
+  EXPECT_EQ(cli_utils::detectQueryType("ASK { ?s ?p ?o }"), "ASK");
+}
+
+TEST(DetectQueryType, PrefixThenSelect) {
+  EXPECT_EQ(cli_utils::detectQueryType(
+                "PREFIX ex: <http://example.org/>\nSELECT * WHERE { ?s ?p ?o }"),
+            "SELECT");
+}
+
+TEST(DetectQueryType, MultiplePrefixesThenConstruct) {
+  std::string query =
+      "PREFIX ex: <http://example.org/>\n"
+      "PREFIX foaf: <http://xmlns.com/foaf/0.1/>\n"
+      "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "CONSTRUCT");
+}
+
+TEST(DetectQueryType, BaseThenSelect) {
+  EXPECT_EQ(cli_utils::detectQueryType(
+                "BASE <http://example.org/>\nSELECT * WHERE { ?s ?p ?o }"),
+            "SELECT");
+}
+
+TEST(DetectQueryType, LowercasePrefixAndBase) {
+  std::string query =
+      "prefix ex: <http://example.org/>\n"
+      "base <http://example.org/>\n"
+      "SELECT * WHERE { ?s ?p ?o }";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "SELECT");
+}
+
+TEST(DetectQueryType, CommentLinesSkipped) {
+  std::string query =
+      "# This is a comment\n"
+      "# Another comment\n"
+      "SELECT * WHERE { ?s ?p ?o }";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "SELECT");
+}
+
+TEST(DetectQueryType, EmptyQueryReturnsEmpty) {
+  EXPECT_EQ(cli_utils::detectQueryType(""), "");
+}
+
+TEST(DetectQueryType, WhitespaceOnlyReturnsEmpty) {
+  EXPECT_EQ(cli_utils::detectQueryType("   \n\t\n  "), "");
+}
+
+TEST(DetectQueryType, LeadingWhitespaceHandled) {
+  EXPECT_EQ(cli_utils::detectQueryType("   \t  SELECT * WHERE { ?s ?p ?o }"),
+            "SELECT");
+}
+
+// ============================================================
+// Regression: queries from the downstream API often carry PREFIX
+// declarations.  The old trimAndUpper() would return "PREFIX"
+// instead of the actual verb, breaking CONSTRUCT/DESCRIBE dispatch.
+// ============================================================
+
+TEST(DetectQueryType, PrefixThenDescribe) {
+  std::string query =
+      "PREFIX schema: <http://schema.org/>\n"
+      "DESCRIBE <http://example.org/resource>";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "DESCRIBE");
+}
+
+TEST(DetectQueryType, MixedPrefixBaseCommentThenAsk) {
+  std::string query =
+      "# Check existence\n"
+      "PREFIX ex: <http://example.org/>\n"
+      "BASE <http://example.org/>\n"
+      "ASK { ex:foo ex:bar ex:baz }";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "ASK");
+}
+
+TEST(DetectQueryType, PrefixOnSameLineStyleDescribe) {
+  // Some clients emit PREFIX without a trailing newline before the verb
+  std::string query =
+      "PREFIX ex: <http://example.org/>\n"
+      "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n"
+      "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+      "CONSTRUCT { ?s rdfs:label ?o } WHERE { ?s rdfs:label ?o }";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "CONSTRUCT");
+}
+
+TEST(DetectQueryType, InsertDataDetected) {
+  // SPARQL UPDATE verb — detectQueryType should return it as-is
+  std::string query =
+      "PREFIX ex: <http://example.org/>\n"
+      "INSERT DATA { ex:s ex:p ex:o }";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "INSERT");
+}
+
+TEST(DetectQueryType, DeleteWhereDetected) {
+  std::string query =
+      "PREFIX ex: <http://example.org/>\n"
+      "DELETE WHERE { ex:s ex:p ?o }";
+  EXPECT_EQ(cli_utils::detectQueryType(query), "DELETE");
 }

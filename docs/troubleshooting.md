@@ -76,6 +76,86 @@ the query execution. We will evaluate if it's  worth also externalizing SPO and
 SOP permutations in this way to further reduce the RAM usage, or to let the user
 decide which permutations shall be stored in which format.
 
+## QLever CLI: Build, Test & Deploy
+
+### Build & Test Commands
+
+```bash
+# 1. Run unit tests (lightweight + RDF, builds full qlever-cli binary)
+docker build -f Dockerfiles/Dockerfile.cli-test -t qlever-cli-test . && docker run --rm qlever-cli-test
+
+# 2. Build production CLI image (Alpine — required for Alpine-based downstream containers)
+docker build --platform linux/amd64 --no-cache -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:local .
+
+# 3. Build downstream app image (example)
+cd ~/dev/qaecy-monorepo && npm run services:build accessors-qlever
+```
+
+### Alpine vs Ubuntu: Which Dockerfile to Use
+
+The CLI has two production Dockerfiles:
+
+- `Dockerfiles/Dockerfile.cli-only.alpine` — builds against **musl** (Alpine libc)
+- `Dockerfiles/Dockerfile.cli-only.ubuntu` — builds against **glibc** (Ubuntu libc)
+
+**You must match the CLI binary to the downstream container's base image.**
+If the downstream container uses Alpine (e.g. `node:22-alpine3.22`), you **must**
+use `Dockerfile.cli-only.alpine`. A glibc-linked binary copied into an Alpine
+container will fail with:
+
+```
+rosetta error: failed to open elf at /lib64/ld-linux-x86-64.so.2
+```
+
+This is because Alpine uses musl and does not have the glibc dynamic linker.
+
+### `_exit()` and QLever Destructor Hangs
+
+The CLI uses `_exit(0)` (via `flushAndExit()`) instead of `return` in all
+functions that create a `QleverCliContext`. This is intentional.
+
+QLever's `QleverCliContext` destructor triggers background thread joins
+(DeltaTriplesManager, etc.) that do not complete cleanly. On native Linux this
+causes a hang; under Rosetta emulation (Docker on Apple Silicon) it causes a
+crash. Since the CLI is a short-lived process and all output has been flushed
+before `_exit()`, the OS safely reclaims all resources.
+
+**Do not replace `flushAndExit()` with `return`** without first confirming
+that QLever's destructors complete cleanly.
+
+### `update-triples` Version Mismatch
+
+If you see an error like:
+
+```
+Assertion `version == formatVersion` failed.
+The format version for serialized triples [...] is 1 but you tried to read
+serialized triples with version 0
+```
+
+This means the `full.update-triples` file on the mounted volume was written by
+an older QLever version. The file lives on the **persistent volume**, not inside
+the Docker image — rebuilding the image does not remove it.
+
+**Fix:** Delete the stale file and re-apply any SPARQL UPDATEs:
+
+```bash
+rm /mnt/qlever/<index-path>/full.update-triples
+```
+
+### Query Type Detection (`detectQueryType`)
+
+The CLI uses `cli_utils::detectQueryType()` (in `src/cli-utils/QueryTypeDetect.h`)
+to determine the SPARQL verb (SELECT, CONSTRUCT, DESCRIBE, ASK, etc.). This
+function correctly skips PREFIX, BASE declarations and comment lines.
+
+**Do not replace this with a naive "first word" parser** (e.g. `trimAndUpper`).
+Queries from the downstream API typically carry PREFIX declarations, and a naive
+parser would return "PREFIX" instead of the actual verb, breaking
+CONSTRUCT/DESCRIBE dispatch.
+
+---
+
 ## Note when using Docker on Mac or Windows
 
 When building an index, QLever will create scratch space for on-disc sorting.

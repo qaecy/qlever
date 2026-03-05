@@ -11,11 +11,14 @@ services:
       - ./build-alpine:/qlever/build
     working_dir: /qlever/build
     user: root
+    environment:
+      - BUILD_JOBS=${BUILD_JOBS:-0}
     command: >
       /bin/sh -c "
-        cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO
+        if [ \"$$BUILD_JOBS\" = '0' ]; then JOBS=$$(nproc); else JOBS=$$BUILD_JOBS; fi
+        && cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO
               -DCMAKE_CXX_FLAGS='-Wno-psabi -Wno-non-template-friend' ..
-        && ninja -j$(nproc) qlever-cli qlever-index
+        && ninja -j$$JOBS qlever-cli qlever-index
       "
 
   # Packages the locally-built binaries into a slim Alpine runtime image

@@ -17,6 +17,14 @@ namespace cli_utils {
 // (or already-freed) instance on another thread.  Correct same-thread LIFO
 // nesting is preserved because saved pointers that point outside the devNull
 // set are always valid original buffers.
+//
+// Known limitation (C1): the mutex serializes rdbuf swaps but cannot prevent
+// engine threads from calling operator<< on cerr/clog concurrently with a
+// swap.  This is technically undefined behaviour per the C++ standard.
+// In practice this is acceptable because the CLI is short-lived and
+// single-command, and all SuppressStreams usage is on the main thread.
+// If full thread-safety is ever needed, use QLever's native log-level
+// suppression (ad_utility::setGlobalLoggingStream / log levels) instead.
 class SuppressStreams {
  public:
   SuppressStreams() : devNull_("/dev/null") {

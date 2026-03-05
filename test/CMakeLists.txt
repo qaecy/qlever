@@ -499,3 +499,7 @@ addLinkAndDiscoverTestNoLibs(ConstexprMapTest)
 addLinkAndDiscoverTestNoLibs(ParallelExecutorTest)
 
 addLinkAndDiscoverTestNoLibs(VariantRangeFilterTest)
+
+addLinkAndDiscoverTest(CliUtilsTest cliUtilsLight)
+
+addLinkAndDiscoverTest(CliUtilsRdfTest cliUtils)

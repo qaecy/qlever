@@ -34,10 +34,12 @@ COPY GitVersion.cmake /qlever/
 COPY CompilationInfo.cmake /qlever/
 
 # Build essential QLever binaries
-# Build essential QLever binaries
+# Use `--build-arg BUILD_JOBS=2` to limit parallel compilation (default: all cores).
+ARG BUILD_JOBS=0
 WORKDIR /qlever/build/
 RUN cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" -GNinja ..
-RUN cmake --build . --target qlever-cli qlever-index
+RUN if [ "$BUILD_JOBS" = "0" ]; then JOBS=$(nproc); else JOBS=$BUILD_JOBS; fi && \
+    cmake --build . --target qlever-cli qlever-index -- -j$JOBS
 
 # Runtime stage - very minimal Alpine
 FROM alpine:3.22 AS runtime

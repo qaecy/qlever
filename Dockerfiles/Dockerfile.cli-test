@@ -28,14 +28,19 @@ COPY CompilationInfo.cmake /qlever/
 WORKDIR /qlever/build/
 
 # DONT_UPDATE_COMPILATION_INFO avoids a git subprocess (no .git present in the
-# Docker build context). Only the lightweight CliUtilsTest target is built, so
-# the full engine/index/parser chain is configured but never compiled.
+# Docker build context).  We build the full qlever-cli binary (proves the
+# complete link) plus both test targets.
 RUN cmake -DCMAKE_BUILD_TYPE=Release \
           -DLOGLEVEL=INFO \
           -DDONT_UPDATE_COMPILATION_INFO=true \
           -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" \
           -GNinja ..
 
-RUN cmake --build . --target CliUtilsTest -j$(nproc)
+ARG BUILD_JOBS=0
+RUN if [ "$BUILD_JOBS" = "0" ]; then JOBS=$(nproc); else JOBS=$BUILD_JOBS; fi && \
+    cmake --build . --target qlever-cli CliUtilsTest CliUtilsRdfTest -j$JOBS
 
-CMD ["./test/CliUtilsTest", "--gtest_output=xml:/test-results.xml"]
+# Run both test suites; the binary existing proves the full build works.
+CMD sh -c "./test/CliUtilsTest --gtest_output=xml:/test-results-cli.xml && \
+           ./test/CliUtilsRdfTest --gtest_output=xml:/test-results-rdf.xml && \
+           echo 'qlever-cli binary:' && ls -lh ./qlever-cli"

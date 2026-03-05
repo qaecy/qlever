@@ -1,3 +1,5 @@
+#include <unistd.h>
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -10,6 +12,7 @@
 #include "QleverCliContext.h"
 #include "cli-utils/IndexBuilderUtils.h"
 #include "cli-utils/IndexStatsUtils.h"
+#include "cli-utils/QueryTypeDetect.h"
 #include "cli-utils/QueryUtils.h"
 #include "cli-utils/RdfOutputUtils.h"
 #include "cli-utils/StreamSuppressor.h"
@@ -76,8 +79,6 @@ void printUsage(const char* programName) {
                "[name]  Execute SPARQL query (optionally pin result)\n";
   std::cerr << "  query-to-file <index_basename> <sparql_query> <format> "
                "<output_file>  Execute CONSTRUCT query to file\n";
-  // std::cerr << "  query-json  <json_input>                      Execute query
-  // from JSON input\n";
   std::cerr << "  update      <index_basename> <sparql_update_query>  Execute "
                "SPARQL UPDATE query\n";
   std::cerr << "  stats       <index_basename>                  Get index "
@@ -90,14 +91,7 @@ void printUsage(const char* programName) {
       << "                                                Formats: nt, nq\n";
   std::cerr << "                                                Add .gz to "
                "output_file for compression\n";
-  std::cerr << "\nJSON input format for query-json:\n";
-  std::cerr << "{\n";
-  std::cerr << "  \"indexBasename\": \"path/to/index\",\n";
-  std::cerr << "  \"query\": \"SELECT * WHERE { ?s ?p ?o } LIMIT 10\",\n";
-  std::cerr
-      << "  \"format\": \"sparql-json\"  // optional: sparql-json, csv, tsv\n";
-  std::cerr << "}\n\n";
-  std::cerr << "JSON input format for build-index:\n";
+  std::cerr << "\nJSON input format for build-index:\n";
   std::cerr << "{\n";
   std::cerr << "  \"index_name\": \"my-index\",\n";
   std::cerr << "  \"index_directory\": \"/path/to/indices\",  // optional, "
@@ -129,15 +123,15 @@ void printUsage(const char* programName) {
       << "  on-disk-compressed-geo-split - Required for GeoSPARQL support\n";
 }
 
-// Helper to trim and uppercase a string (for query type detection)
-std::string trimAndUpper(const std::string& s) {
-  auto start = s.find_first_not_of(" \t\n\r");
-  if (start == std::string::npos) return "";
-  auto end = s.find_first_of(" \t\n\r", start);
-  std::string firstWord = s.substr(start, end - start);
-  std::transform(firstWord.begin(), firstWord.end(), firstWord.begin(),
-                 ::toupper);
-  return firstWord;
+// Flush stdout/stderr and call _exit() to bypass QLever's destructors.
+// QleverCliContext's background threads (DeltaTriplesManager etc.) do not
+// join cleanly, causing hangs or crashes (including under Rosetta/emulation).
+// The OS reclaims all resources on process exit, so this is safe once all
+// output has been written.
+[[noreturn]] static void flushAndExit(int code) {
+  std::cout.flush();
+  std::cerr.flush();
+  _exit(code);
 }
 
 // Returns the memory limit to use: QLEVER_MEMORY_LIMIT_GB env var if set,
@@ -162,7 +156,7 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
                  const std::string& name = "") {
   try {
     // Detect query type
-    std::string type = trimAndUpper(queryStr);
+    std::string type = cli_utils::detectQueryType(queryStr);
     std::string format = userFormat;
     // Set default format if not overridden
     if (format.empty()) {
@@ -211,11 +205,11 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
     }
 
     std::cout << result << std::endl;
-    return 0;
+    flushAndExit(0);
   } catch (const std::exception& e) {
     json errorResponse = createErrorResponse(e.what());
     std::cerr << errorResponse.dump(2) << std::endl;
-    return 1;
+    flushAndExit(1);
   }
 }
 
@@ -236,11 +230,11 @@ int executeUpdate(const std::string& indexBasename,
     json response =
         createSuccessResponse("Update applied successfully.", updateQuery, 0);
     std::cout << response.dump() << std::endl;
-    return 0;
+    flushAndExit(0);
   } catch (const std::exception& e) {
     json errorResponse = createErrorResponse(e.what(), updateQuery);
     std::cerr << errorResponse.dump() << std::endl;
-    return 1;
+    flushAndExit(1);
   }
 }
 
@@ -268,11 +262,11 @@ int serializeDatabase(const std::string& indexBasename,
       std::cerr << response.dump(2) << std::endl;
     }
 
-    return 0;
+    flushAndExit(0);
   } catch (const std::exception& e) {
     json errorResponse = createErrorResponse(e.what());
     std::cerr << errorResponse.dump(2) << std::endl;
-    return 1;
+    flushAndExit(1);
   }
 }
 
@@ -282,18 +276,18 @@ int buildIndex(const std::string& jsonInput) {
     json response = cli_utils::IndexBuilder::buildIndex(input);
 
     std::cout << response.dump() << std::endl;
-    return response["success"].get<bool>() ? 0 : 1;
+    flushAndExit(response["success"].get<bool>() ? 0 : 1);
 
   } catch (const json::parse_error& e) {
     json response =
         createErrorResponse("Invalid JSON input: " + std::string(e.what()));
     std::cerr << response.dump() << std::endl;
-    return 1;
+    flushAndExit(1);
   } catch (const std::exception& e) {
     json response =
         createErrorResponse("Unexpected error: " + std::string(e.what()));
     std::cerr << response.dump() << std::endl;
-    return 1;
+    flushAndExit(1);
   }
 }
 
@@ -309,13 +303,13 @@ int getIndexStats(const std::string& indexBasename) {
 
     json response = statsCollector.collectStats(indexBasename);
     std::cout << response.dump(2) << std::endl;
-    return 0;
+    flushAndExit(0);
 
   } catch (const std::exception& e) {
     json response = createErrorResponse(e.what());
     response["indexBasename"] = indexBasename;
     std::cerr << response.dump(2) << std::endl;
-    return 1;
+    flushAndExit(1);
   }
 }
 
@@ -351,14 +345,14 @@ int executeQueryToFile(const std::string& indexBasename,
             .count();
 
     std::cout << response.dump() << std::endl;
-    return 0;
+    flushAndExit(0);
 
   } catch (const std::exception& e) {
     json response =
         createErrorResponse("Query execution failed: " + std::string(e.what()));
     response["query"] = queryStr;
     std::cerr << response.dump() << std::endl;
-    return 1;
+    flushAndExit(1);
   }
 }
 
@@ -390,11 +384,7 @@ int main(int argc, char* argv[]) {
       return executeUpdate(argv[2], argv[3]);
     } else if (command == "query-to-file" && argc == 6) {
       return executeQueryToFile(argv[2], argv[3], argv[4], argv[5]);
-    }
-    // else if (command == "query-json" && argc == 3) {
-    //     return executeJsonQuery(argv[2]);
-    // }
-    else if (command == "stats" && argc == 3) {
+    } else if (command == "stats" && argc == 3) {
       return getIndexStats(argv[2]);
     } else if (command == "build-index" && argc == 3) {
       return buildIndex(argv[2]);
