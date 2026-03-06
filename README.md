@@ -2,6 +2,67 @@
 
 This is a QAECY version of the Qlever quad store. It extends the existing work with a CLI tool that allows querying a dataset as an embedded database.
 
+## Build, test and extract binary
+
+If following passes, these are verified:
+
+1. **Compilation** — `qlever-cli`, `qlever-index`, and all test binaries compile and link successfully.
+2. **Unit tests** — `CliUtilsTest` and `CliUtilsRdfTest` pass (stream suppression, query type detection, RDF output utils, index builder utils). The Docker image is only produced if these pass.
+3. **E2E integration tests** — the actual CLI binary is exercised end-to-end in Docker containers, covering:
+   - `build-index` — create an index from RDF data (triples and quads)
+   - `query` — SELECT queries with CSV output to verify data
+   - `write` — insert triples/quads from stdin
+   - `write --graph` — insert triples into a named graph
+   - `delete` — delete triples/quads from stdin
+   - `binary-rebuild` — merge delta triples into a new index, then query the rebuilt index
+   - `update` — SPARQL UPDATE (INSERT DATA / DELETE DATA)
+   - Correctness checks after every mutation (query to confirm inserts, deletes, and rebuilds)
+4. **Binary extraction** — a working `qlever-cli` binary is copied to the current directory.
+
+If the command completes successfully, all CLI commands work and you have a ready-to-use binary.
+
+### Alpine
+```bash
+# 1. Build + unit tests + produce runtime image
+docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine-test .
+
+# 2. Run e2e integration tests
+cd e2e-cli && npm install && npx vitest run && cd ..
+
+# 1. and 2.
+docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine-test . && \
+cd e2e-cli && npm install && npx vitest run && cd ..
+
+# 3. Extract the binary
+docker run --rm --entrypoint="" qlever-cli:alpine-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+
+# 1., 2. and 3.
+docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine-test . && \
+cd e2e-cli && npm install && npx vitest run && cd .. && \
+docker run --rm --entrypoint="" qlever-cli:alpine-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+```
+
+### Ubuntu
+```bash
+# 1. Build + unit tests + produce runtime image
+docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu-test .
+
+# 2. Run e2e integration tests
+cd e2e-cli && npm install && npx vitest run && cd ..
+
+# 1. and 2.
+docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu-test . && \
+cd e2e-cli && npm install && npx vitest run && cd ..
+
+# 3. Extract the binary
+docker run --rm --entrypoint="" qlever-cli:ubuntu-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+
+# 1., 2. and 3.
+docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu-test . && \
+cd e2e-cli && npm install && npx vitest run && cd .. && \
+docker run --rm --entrypoint="" qlever-cli:ubuntu-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+```
+
 ## Use
 
 The CLI tool binary is built inside a Docker container for compatibility reasons. Therefore all commands are run through the container.
@@ -12,7 +73,7 @@ The qlever CLI is what is added in this repo and it makes querying and serializi
 
 ### Build index
 
-The index configuration is described in a JSON file that looks like the one you find in `misc/configs/build-test-index.json`. This config loads the very small nquads file `misc/test-simple.nq` (`test.nq contains RDF* and will currently fail`).
+The index configuration is described in a JSON file that looks like the one you find in `misc/configs/build-test-index.json`. This config loads the very small nquads file `misc/test-simple.nq`.
 
 An important setting is the vocabulary type. Here are the 5 available types:
 
@@ -25,25 +86,8 @@ An important setting is the vocabulary type. Here are the 5 available types:
 Building an index from the file `misc/test-simple.nq` is handled by the following CLI command:
 
 ```bash
-# Persistent
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli build-index \"\$(cat misc/configs/build-test-index.json)\""
-
-# In-memory
-docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli build-index \"\$(cat misc/configs/build-test-index-mem.json)\""
 ```
-
-### Build index from a gzipped stream (stdin)
-
-You can build an index directly from a gzipped RDF file by unzipping and piping it to the index builder. Use `"path": "-"` in your JSON config to indicate stdin:
-
-```bash
-# Example: Build index from a gzipped NTriples file using stdin
-gunzip -c misc/test-simple.nt.gz | \
-  docker run --rm --user root -i -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine \
-  sh -c "/qlever/qlever-cli build-index \"\$(cat misc/configs/build-test-index-stdin.json)\""
-```
-
-This will read the uncompressed RDF data from stdin and build the index as usual.
 
 ### Get index stats
 

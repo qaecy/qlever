@@ -1,3 +1,0 @@
-sut:
-  build: .
-  entrypoint: e2e/e2e.sh

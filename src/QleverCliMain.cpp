@@ -18,10 +18,13 @@
 #include "cli-utils/RdfOutputUtils.h"
 #include "cli-utils/StreamSuppressor.h"
 #include "engine/ExecuteUpdate.h"
+#include "engine/LocalVocab.h"
 #include "engine/QueryPlanner.h"
 #include "index/InputFileSpecification.h"
 #include "index/vocabulary/VocabularyType.h"
+#include "parser/RdfParser.h"
 #include "parser/SparqlParser.h"
+#include "parser/TokenizerCtre.h"
 #include "util/Log.h"
 #include "util/MemorySize/MemorySize.h"
 #include "util/Timer.h"
@@ -73,59 +76,69 @@ json createSuccessResponse(const std::string& message) {
   return response;
 }
 
-void printUsage(const char* programName) {
-  std::cerr << "Usage: " << programName
-            << " [--allocator-memory-gb <GB>] <command> [options]\n\n";
-  std::cerr << "Global options:\n";
-  std::cerr << "  --allocator-memory-gb <GB>  Set memory limit (default: 4 GB, "
-               "env: QLEVER_MEMORY_LIMIT_GB)\n\n";
-  std::cerr << "Commands:\n";
-  std::cerr << "  query       <index_basename> <sparql_query> [output_format] "
-               "[name]  Execute SPARQL query (optionally pin result)\n";
-  std::cerr << "  query-to-file <index_basename> <sparql_query> <format> "
-               "<output_file>  Execute CONSTRUCT query to file\n";
-  std::cerr << "  update      <index_basename> <sparql_update_query>  Execute "
-               "SPARQL UPDATE query\n";
-  std::cerr << "  stats       <index_basename>                  Get index "
-               "statistics\n";
-  std::cerr << "  build-index <json_input>                      Build index "
-               "from RDF files\n";
-  std::cerr << "  serialize   <index_basename> <format> [output_file]  Dump "
-               "database content\n";
-  std::cerr
-      << "                                                Formats: nt, nq\n";
-  std::cerr << "                                                Add .gz to "
-               "output_file for compression\n";
-  std::cerr << "\nJSON input format for build-index:\n";
-  std::cerr << "{\n";
-  std::cerr << "  \"index_name\": \"my-index\",\n";
-  std::cerr << "  \"index_directory\": \"/path/to/indices\",  // optional, "
-               "defaults to current dir\n";
-  std::cerr << "  \"input_files\": [\n";
-  std::cerr << "    \"data.ttl\",\n";
-  std::cerr << "    {\"path\": \"data.nt\", \"format\": \"nt\"},\n";
-  std::cerr << "    {\"path\": \"data.nq\", \"format\": \"nq\", "
-               "\"default_graph\": \"http://example.org/graph\"}\n";
-  std::cerr << "  ],\n";
-  std::cerr << "  \"memory_limit_gb\": 4,        // optional\n";
-  std::cerr << "  \"settings_file\": \"settings.json\",  // optional\n";
-  std::cerr << "  \"keep_temp_files\": false,    // optional\n";
-  std::cerr << "  \"vocabulary_type\": \"on-disk-compressed-geo-split\",  // "
-               "optional, for GeoSPARQL support\n";
-  std::cerr
-      << "  \"add_words_from_literals\": true  // optional, for text index\n";
-  std::cerr
-      << "  \"prefixes_for_id_encoded_iris\": [\"http://example.org/prefix/\"] "
+void printUsage(const char* programName, std::ostream& out = std::cerr) {
+  out << "Usage: " << programName
+      << " [--allocator-memory-gb <GB>] <command> [options]\n\n";
+  out << "Global options:\n";
+  out << "  --allocator-memory-gb <GB>  Set memory limit (default: 4 GB, "
+         "env: QLEVER_MEMORY_LIMIT_GB)\n\n";
+  out << "Commands:\n";
+  out << "  query       <index_basename> <sparql_query> [output_format] "
+         "[name]  Execute SPARQL query (optionally pin result)\n";
+  out << "  query-to-file <index_basename> <sparql_query> <format> "
+         "<output_file>  Execute CONSTRUCT query to file\n";
+  out << "  update      <index_basename> <sparql_update_query>  Execute "
+         "SPARQL UPDATE query\n";
+  out << "  query-json  <json_input>                      Execute query "
+         "from JSON input\n";
+  out << "  write       <index_basename> <format> <input_file> [default_graph] "
+         " Execute write from stream (use '-' for stdin)\n";
+  out << "  delete      <index_basename> <format> <input_file> [default_graph] "
+         " Execute delete from stream (use '-' for stdin)\n";
+  out << "  stats       <index_basename>                  Get index "
+         "statistics\n";
+  out << "  binary-rebuild <index_basename> [output_basename]  Merge "
+         "delta triples into main index\n";
+  out << "  build-index <json_input>                      Build index "
+         "from RDF files\n";
+  out << "  serialize   <index_basename> <format> [output_file]  Dump "
+         "database content\n";
+  out << "                                                Formats: nt, nq\n";
+  out << "                                                Add .gz to "
+         "output_file for compression\n";
+  out << "\nJSON input format for query-json:\n";
+  out << "{\n";
+  out << "  \"indexBasename\": \"path/to/index\",\n";
+  out << "  \"query\": \"SELECT * WHERE { ?s ?p ?o } LIMIT 10\",\n";
+  out << "  \"format\": \"sparql-json\"  // optional: sparql-json, csv, tsv\n";
+  out << "}\n";
+  out << "\nJSON input format for build-index:\n";
+  out << "{\n";
+  out << "  \"index_name\": \"my-index\",\n";
+  out << "  \"index_directory\": \"/path/to/indices\",  // optional, "
+         "defaults to current dir\n";
+  out << "  \"input_files\": [\n";
+  out << "    \"data.ttl\",\n";
+  out << "    {\"path\": \"data.nt\", \"format\": \"nt\"},\n";
+  out << "    {\"path\": \"data.nq\", \"format\": \"nq\", "
+         "\"default_graph\": \"http://example.org/graph\"}\n";
+  out << "  ],\n";
+  out << "  \"memory_limit_gb\": 4,        // optional\n";
+  out << "  \"settings_file\": \"settings.json\",  // optional\n";
+  out << "  \"keep_temp_files\": false,    // optional\n";
+  out << "  \"vocabulary_type\": \"on-disk-compressed-geo-split\",  // "
+         "optional, for GeoSPARQL support\n";
+  out << "  \"add_words_from_literals\": true  // optional, for text index\n";
+  out << "  \"prefixes_for_id_encoded_iris\": [\"http://example.org/prefix/\"] "
          " // optional, for text index\n";
-  std::cerr << "}\n";
-  std::cerr << "\nVocabulary types:\n";
-  std::cerr << "  in-memory-uncompressed     - Fast but uses more memory\n";
-  std::cerr << "  on-disk-uncompressed       - Slower but uses less memory\n";
-  std::cerr << "  in-memory-compressed       - Good balance (compressed, in "
-               "memory)\n";
-  std::cerr << "  on-disk-compressed         - Default (compressed, on disk)\n";
-  std::cerr
-      << "  on-disk-compressed-geo-split - Required for GeoSPARQL support\n";
+  out << "}\n";
+  out << "\nVocabulary types:\n";
+  out << "  in-memory-uncompressed     - Fast but uses more memory\n";
+  out << "  on-disk-uncompressed       - Slower but uses less memory\n";
+  out << "  in-memory-compressed       - Good balance (compressed, in "
+         "memory)\n";
+  out << "  on-disk-compressed         - Default (compressed, on disk)\n";
+  out << "  on-disk-compressed-geo-split - Required for GeoSPARQL support\n";
 }
 
 // Flush stdout/stderr and call _exit() to bypass QLever's destructors.
@@ -224,6 +237,172 @@ int executeUpdate(const std::string& indexBasename,
     flushAndExit(0);
   } catch (const std::exception& e) {
     json errorResponse = createErrorResponse(e.what(), updateQuery);
+    std::cerr << errorResponse.dump() << std::endl;
+    flushAndExit(1);
+  }
+}
+
+int executeJsonQuery(const std::string& jsonInput,
+                     ad_utility::MemorySize memLimit) {
+  try {
+    json input = json::parse(jsonInput);
+
+    if (!input.contains("indexBasename") || !input.contains("query")) {
+      json response =
+          createErrorResponse("Missing required fields: indexBasename, query");
+      std::cerr << response.dump() << std::endl;
+      return 1;
+    }
+
+    std::string indexBasename = input["indexBasename"].get<std::string>();
+    std::string queryStr = input["query"].get<std::string>();
+    std::string format = input.value("format", "sparql-json");
+
+    return executeQuery(indexBasename, queryStr, memLimit, format);
+
+  } catch (const json::parse_error& e) {
+    json response =
+        createErrorResponse("Invalid JSON input: " + std::string(e.what()));
+    std::cerr << response.dump() << std::endl;
+    return 1;
+  }
+}
+
+int executeWriteOrDelete(const std::string& indexBasename,
+                         const std::string& format,
+                         const std::string& inputFile, bool isDelete,
+                         ad_utility::MemorySize memLimit,
+                         const std::string& defaultGraph = "") {
+  try {
+    qlever::Filetype filetype;
+    if (format == "ttl" || format == "turtle" || format == "nt") {
+      filetype = qlever::Filetype::Turtle;
+    } else if (format == "nq") {
+      filetype = qlever::Filetype::NQuad;
+    } else {
+      throw std::runtime_error("Unsupported format for " +
+                               std::string(isDelete ? "delete" : "write") +
+                               ": " + format + ". Use ttl, nt, or nq.");
+    }
+
+    std::string actualInputFile = (inputFile == "-") ? "/dev/stdin" : inputFile;
+
+    qlever::EngineConfig config;
+    config.baseName_ = indexBasename;
+    config.memoryLimit_ = memLimit;
+
+    auto qlever = std::make_shared<qlever::QleverCliContext>(config);
+
+    TripleComponent defaultGraphTc =
+        TripleComponent{ad_utility::triple_component::Iri::fromIriref(
+            std::string(DEFAULT_GRAPH_IRI))};
+    if (!defaultGraph.empty() && defaultGraph != "-") {
+      defaultGraphTc =
+          TripleComponent{ad_utility::triple_component::Iri::fromIriref(
+              "<" + defaultGraph + ">")};
+    }
+
+    std::unique_ptr<RdfParserBase> parser;
+    if (filetype == qlever::Filetype::NQuad) {
+      parser = std::make_unique<RdfStreamParser<NQuadParser<TokenizerCtre>>>(
+          actualInputFile, &qlever->encodedIriManager(),
+          DEFAULT_PARSER_BUFFER_SIZE, std::move(defaultGraphTc));
+    } else {
+      parser = std::make_unique<RdfStreamParser<TurtleParser<TokenizerCtre>>>(
+          actualInputFile, &qlever->encodedIriManager(),
+          DEFAULT_PARSER_BUFFER_SIZE, std::move(defaultGraphTc));
+    }
+
+    LocalVocab localVocab;
+    const auto& vocab = qlever->getVocab();
+    const auto& encodedIriMgr = qlever->encodedIriManager();
+
+    size_t totalProcessed = 0;
+    while (auto batchOpt = parser->getBatch()) {
+      auto& batch = batchOpt.value();
+      if (batch.empty()) continue;
+
+      std::vector<IdTriple<0>> idTriples;
+      idTriples.reserve(batch.size());
+
+      for (auto& turtleTriple : batch) {
+        Id sId = std::move(turtleTriple.subject_)
+                     .toValueId(vocab, localVocab, encodedIriMgr);
+        Id pId = std::move(turtleTriple.predicate_)
+                     .toValueId(vocab, localVocab, encodedIriMgr);
+        Id oId = std::move(turtleTriple.object_)
+                     .toValueId(vocab, localVocab, encodedIriMgr);
+        Id gId = std::move(turtleTriple.graphIri_)
+                     .toValueId(vocab, localVocab, encodedIriMgr);
+
+        idTriples.push_back(IdTriple<0>{std::array{sId, pId, oId, gId}});
+      }
+
+      if (isDelete) {
+        qlever->deleteTriples(std::move(idTriples), std::move(localVocab));
+      } else {
+        qlever->insertTriples(std::move(idTriples), std::move(localVocab));
+      }
+
+      localVocab = LocalVocab{};
+      totalProcessed += batch.size();
+    }
+
+    json response = createSuccessResponse(
+        (isDelete ? std::string("Deleted ") : std::string("Inserted ")) +
+        std::to_string(totalProcessed) + " triples successfully.");
+    std::cout << response.dump() << std::endl;
+    flushAndExit(0);
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    std::cerr << errorResponse.dump() << std::endl;
+    flushAndExit(1);
+  }
+}
+
+int executeBinaryRebuild(const std::string& indexBasename,
+                         const std::string& outputBasename,
+                         ad_utility::MemorySize memLimit) {
+  try {
+    qlever::EngineConfig config;
+    config.baseName_ = indexBasename;
+    config.memoryLimit_ = memLimit;
+
+    auto qlever = std::make_shared<qlever::QleverCliContext>(config);
+
+    auto deltaCounts = qlever->getDeltaCounts();
+    if (deltaCounts.triplesInserted_ == 0 &&
+        deltaCounts.triplesDeleted_ == 0) {
+      json response;
+      response["success"] = true;
+      response["skipped"] = true;
+      response["message"] =
+          "Binary rebuild not necessary: no delta triples to materialize.";
+      response["indexBasename"] = indexBasename;
+      response["timestamp"] =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count();
+      std::cout << response.dump() << std::endl;
+      flushAndExit(0);
+    }
+
+    qlever->binaryRebuild(outputBasename);
+
+    json response;
+    response["success"] = true;
+    response["message"] = "Binary rebuild completed successfully.";
+    response["indexBasename"] = indexBasename;
+    response["timestamp"] =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    std::cout << response.dump() << std::endl;
+    flushAndExit(0);
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    errorResponse["command"] = "binary-rebuild";
+    errorResponse["indexBasename"] = indexBasename;
     std::cerr << errorResponse.dump() << std::endl;
     flushAndExit(1);
   }
@@ -375,9 +554,9 @@ int main(int argc, char* argv[]) {
 
   std::string command = args[1];
 
-  // Handle help flags
+  // Handle help flags - print to stdout when explicitly requested
   if (command == "--help" || command == "-h" || command == "help") {
-    printUsage(argv[0]);
+    printUsage(argv[0], std::cout);
     return 0;
   }
 
@@ -394,12 +573,41 @@ int main(int argc, char* argv[]) {
     } else if (command == "update" && nargs == 4) {
       // update <index_basename> <sparql_update_query>
       return executeUpdate(args[2], args[3], memLimit);
+    } else if (command == "query-json" && nargs == 3) {
+      // query-json <json_input>
+      return executeJsonQuery(args[2], memLimit);
+    } else if (command == "write" && nargs >= 5) {
+      // write <index_basename> <format> <input_file> [default_graph]
+      // write <index_basename> <format> <input_file> --graph <uri>
+      std::string defaultGraph;
+      if (nargs >= 7 && args[5] == "--graph") {
+        defaultGraph = args[6];
+      } else if (nargs == 6) {
+        defaultGraph = args[5];
+      }
+      return executeWriteOrDelete(args[2], args[3], args[4], false, memLimit,
+                                  defaultGraph);
+    } else if (command == "delete" && nargs >= 5) {
+      // delete <index_basename> <format> <input_file> [default_graph]
+      // delete <index_basename> <format> <input_file> --graph <uri>
+      std::string defaultGraph;
+      if (nargs >= 7 && args[5] == "--graph") {
+        defaultGraph = args[6];
+      } else if (nargs == 6) {
+        defaultGraph = args[5];
+      }
+      return executeWriteOrDelete(args[2], args[3], args[4], true, memLimit,
+                                  defaultGraph);
     } else if (command == "query-to-file" && nargs == 6) {
       return executeQueryToFile(args[2], args[3], args[4], args[5], memLimit);
     } else if (command == "stats" && nargs == 3) {
       return getIndexStats(args[2], statsMemLimit);
     } else if (command == "build-index" && nargs == 3) {
       return buildIndex(args[2]);
+    } else if (command == "binary-rebuild" && (nargs == 3 || nargs == 4)) {
+      // binary-rebuild <index_basename> [output_basename]
+      std::string outputBasename = (nargs == 4) ? args[3] : args[2];
+      return executeBinaryRebuild(args[2], outputBasename, memLimit);
     } else if (command == "serialize" && (nargs == 4 || nargs == 5)) {
       std::string outputFile = (nargs == 5) ? args[4] : "";
       return serializeDatabase(args[2], args[3], memLimit, outputFile);

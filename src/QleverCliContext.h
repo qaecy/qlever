@@ -184,13 +184,16 @@ class QleverCliContext {
             }));
   }
 
-  void binaryRebuild(const std::string& indexBaseName) {
+  void binaryRebuild(const std::string& indexBaseName,
+                     const std::string& outputBaseName = "") {
+    const std::string& outBase =
+        outputBaseName.empty() ? indexBaseName : outputBaseName;
     auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
-    auto logFileName = indexBaseName + ".rebuild-index-log.txt";
+    auto logFileName = outBase + ".rebuild-index-log.txt";
     auto [currentSnapshot, localVocabCopy, ownedBlocks] =
         index_.deltaTriplesManager()
             .getCurrentLocatedTriplesSharedStateWithVocab();
-    qlever::materializeToIndex(index_.getImpl(), indexBaseName, currentSnapshot,
+    qlever::materializeToIndex(index_.getImpl(), outBase, currentSnapshot,
                                localVocabCopy, ownedBlocks, handle,
                                logFileName);
   }
