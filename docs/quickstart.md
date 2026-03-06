@@ -25,12 +25,17 @@ the QLever repository uses a few submodules.
         cd qlever-code
         docker build -t qlever .
 
-Note: The compilation of qlever by default runs in parallel by default, using the number of logical cores on your 
-machine as the degree of parallelism.  If it runs out of memory on your machine, you can manually set the degree of 
-parallelism by replacing `ninja` (at the end of line 19) by `ninja -j <num_cores_to_use>`. A good starting point for 
-`<num_cores_to_use>` is the available amount of RAM on your machine in GB, divided by 2. You can detect that you ran 
-out of memory when you encounter error messages like
-`c++: fatal error: Killed signal terminated program cc1plus .compilation terminated.`.
+Note: The compilation runs in parallel using all CPU cores by default. If it runs out of memory (error: `c++: fatal error: Killed signal terminated program cc1plus`) or starves other Docker containers, use these flags:
+
+```bash
+# BUILD_JOBS — limit parallel compiler processes (set to available RAM in GB / 2)
+docker build --build-arg BUILD_JOBS=4 -t qlever .
+
+# --memory — also cap the Docker container's total RAM
+docker build --build-arg BUILD_JOBS=4 --memory=8g -t qlever .
+```
+
+At runtime, `--allocator-memory-gb` (default 4 GB) limits heap allocations during query/update execution (clean error instead of OOM). It does not cap index loading or mmap'd data — combine with `--memory` for a hard ceiling. See [Troubleshooting](troubleshooting.md#controlling-memory-usage) for the full breakdown.
 
 ## Get the data
 

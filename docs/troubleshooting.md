@@ -156,6 +156,55 @@ CONSTRUCT/DESCRIBE dispatch.
 
 ---
 
+## Controlling memory usage
+
+### At build time (Docker image compilation)
+
+By default, compilation uses all CPU cores (`nproc`), which can cause the OOM killer to terminate sibling containers.
+
+```bash
+# BUILD_JOBS — limit parallel compiler processes (each can use ~2 GB; set to available RAM / 2)
+docker build --build-arg BUILD_JOBS=4 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
+
+# --memory — hard cap on Docker container RAM during build
+docker build --build-arg BUILD_JOBS=4 --memory=8g -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
+
+# docker compose — set BUILD_JOBS via environment variable
+BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine.yml up
+```
+
+All Dockerfiles (`Dockerfile`, `Dockerfile.cli-only.alpine`, `Dockerfile.cli-only.ubuntu`) support `BUILD_JOBS`.
+
+### At runtime (CLI query/update execution)
+
+`--allocator-memory-gb` sets a budget on QLever's internal `AllocatorWithLimit`, which tracks heap allocations made during query/update execution (joins, sorts, intermediate results, cache). When the budget is exceeded, the operation fails with a clean `AllocationExceedsLimitException` error instead of the OS killing the process.
+
+```bash
+# --allocator-memory-gb — set working memory limit (default: 4 GB)
+qlever-cli --allocator-memory-gb 2 query ./databases/myindex "SELECT ..."
+qlever-cli --allocator-memory-gb 8 update ./databases/myindex "INSERT DATA { ... }"
+
+# QLEVER_MEMORY_LIMIT_GB — same, via environment variable (--allocator-memory-gb takes precedence)
+QLEVER_MEMORY_LIMIT_GB=2 qlever-cli query ./databases/myindex "SELECT ..."
+```
+
+**What this does and does not prevent:**
+
+| Controlled by `--allocator-memory-gb` | NOT controlled (outside this flag) |
+|---|---|
+| Query/update working memory (joins, sorts, intermediate results) | Index data (mmap'd from disk, managed by OS page cache) |
+| Cache entries | Fixed structures (vocabulary, metadata) loaded at startup |
+| Sort spill-to-disk decisions | Total process RSS |
+
+This means `--allocator-memory-gb` alone does **not** fully prevent OOM. If the index itself is large, the mmap'd pages plus fixed structures can exhaust available RAM before any query runs. For full OOM prevention, combine it with Docker's `--memory` flag as a hard ceiling:
+
+```bash
+# --memory is the hard cap (OS kills if exceeded), --allocator-memory-gb is the soft cap (clean error)
+docker run --memory=4g ... qlever-cli --allocator-memory-gb 2 query ./databases/myindex "SELECT ..."
+```
+
+A good rule of thumb: set `--allocator-memory-gb` to about half the container's `--memory` to leave room for index data and OS overhead.
+
 ## Note when using Docker on Mac or Windows
 
 When building an index, QLever will create scratch space for on-disc sorting.

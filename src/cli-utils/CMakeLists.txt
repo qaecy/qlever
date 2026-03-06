@@ -5,6 +5,7 @@ add_library(cliUtils
     QueryUtils.cpp
     IndexStatsUtils.cpp
     IndexBuilderUtils.cpp
+    CliArgs.cpp
 )
 
 target_link_libraries(cliUtils
@@ -23,7 +24,7 @@ target_include_directories(cliUtils
 # (StreamSuppressor, QleverCliContext struct layout) and MemorySize.
 # Avoids pulling in qlever/engine/index and cuts the test build time
 # dramatically.
-add_library(cliUtilsLight STATIC StreamSuppressor.cpp)
+add_library(cliUtilsLight STATIC StreamSuppressor.cpp CliArgs.cpp)
 target_link_libraries(cliUtilsLight PUBLIC memorySize)
 target_include_directories(cliUtilsLight
     PUBLIC
