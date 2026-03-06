@@ -87,6 +87,12 @@ Building an index from the file `misc/test-simple.nq` is handled by the followin
 
 ```bash
 docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli build-index \"\$(cat misc/configs/build-test-index.json)\""
+
+# In-memory
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli build-index \"\$(cat misc/configs/build-test-index-mem.json)\""
+
+# Rebuild (remove delta triples)
+docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/qlever-cli binary-rebuild ./databases/test"
 ```
 
 ### Get index stats

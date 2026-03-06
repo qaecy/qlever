@@ -91,9 +91,9 @@ void printUsage(const char* programName, std::ostream& out = std::cerr) {
          "SPARQL UPDATE query\n";
   out << "  query-json  <json_input>                      Execute query "
          "from JSON input\n";
-  out << "  write       <index_basename> <format> <input_file> [default_graph] "
+  out << "  write       <index_basename> <format> <input_file> [--graph <uri>] "
          " Execute write from stream (use '-' for stdin)\n";
-  out << "  delete      <index_basename> <format> <input_file> [default_graph] "
+  out << "  delete      <index_basename> <format> <input_file> [--graph <uri>] "
          " Execute delete from stream (use '-' for stdin)\n";
   out << "  stats       <index_basename>                  Get index "
          "statistics\n";
