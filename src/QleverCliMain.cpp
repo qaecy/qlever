@@ -10,6 +10,7 @@
 #include <string>
 
 #include "QleverCliContext.h"
+#include "cli-utils/CliArgs.h"
 #include "cli-utils/IndexBuilderUtils.h"
 #include "cli-utils/IndexStatsUtils.h"
 #include "cli-utils/QueryTypeDetect.h"
@@ -73,7 +74,11 @@ json createSuccessResponse(const std::string& message) {
 }
 
 void printUsage(const char* programName) {
-  std::cerr << "Usage: " << programName << " <command> [options]\n\n";
+  std::cerr << "Usage: " << programName
+            << " [--max-memory-in-gb <GB>] <command> [options]\n\n";
+  std::cerr << "Global options:\n";
+  std::cerr << "  --max-memory-in-gb <GB>  Set memory limit (default: 4 GB, "
+               "env: QLEVER_MEMORY_LIMIT_GB)\n\n";
   std::cerr << "Commands:\n";
   std::cerr << "  query       <index_basename> <sparql_query> [output_format] "
                "[name]  Execute SPARQL query (optionally pin result)\n";
@@ -134,24 +139,9 @@ void printUsage(const char* programName) {
   _exit(code);
 }
 
-// Returns the memory limit to use: QLEVER_MEMORY_LIMIT_GB env var if set,
-// otherwise the provided default (in GB).
-static ad_utility::MemorySize memoryLimit(double defaultGb = 4.0) {
-  if (const char* env = std::getenv("QLEVER_MEMORY_LIMIT_GB")) {
-    try {
-      double gb = std::stod(env);
-      if (gb > 0.0) {
-        return ad_utility::MemorySize::bytes(
-            static_cast<size_t>(gb * 1024.0 * 1024.0 * 1024.0));
-      }
-    } catch (const std::exception&) {
-    }
-  }
-  return ad_utility::MemorySize::bytes(
-      static_cast<size_t>(defaultGb * 1024.0 * 1024.0 * 1024.0));
-}
 
 int executeQuery(const std::string& indexBasename, const std::string& queryStr,
+                 ad_utility::MemorySize memLimit,
                  const std::string& userFormat = "",
                  const std::string& name = "") {
   try {
@@ -185,7 +175,7 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = memoryLimit();
+    config.memoryLimit_ = memLimit;
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::QueryExecutor executor(qlever);
@@ -215,12 +205,13 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
 
 // Execute a SPARQL UPDATE query on the given index
 int executeUpdate(const std::string& indexBasename,
-                  const std::string& updateQuery) {
+                  const std::string& updateQuery,
+                  ad_utility::MemorySize memLimit) {
   try {
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = memoryLimit();
+    config.memoryLimit_ = memLimit;
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
 
@@ -240,6 +231,7 @@ int executeUpdate(const std::string& indexBasename,
 
 int serializeDatabase(const std::string& indexBasename,
                       const std::string& format,
+                      ad_utility::MemorySize memLimit,
                       const std::string& outputFile = "") {
   try {
     if (format != "nt" && format != "nq") {
@@ -249,7 +241,7 @@ int serializeDatabase(const std::string& indexBasename,
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = memoryLimit();
+    config.memoryLimit_ = memLimit;
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::DatabaseSerializer serializer(qlever);
@@ -291,12 +283,13 @@ int buildIndex(const std::string& jsonInput) {
   }
 }
 
-int getIndexStats(const std::string& indexBasename) {
+int getIndexStats(const std::string& indexBasename,
+                  ad_utility::MemorySize memLimit) {
   try {
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = memoryLimit(1.0);  // Minimal for stats
+    config.memoryLimit_ = memLimit;
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::IndexStatsCollector statsCollector(qlever);
@@ -315,12 +308,13 @@ int getIndexStats(const std::string& indexBasename) {
 
 int executeQueryToFile(const std::string& indexBasename,
                        const std::string& queryStr, const std::string& format,
-                       const std::string& outputFile) {
+                       const std::string& outputFile,
+                       ad_utility::MemorySize memLimit) {
   try {
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
-    config.memoryLimit_ = memoryLimit();
+    config.memoryLimit_ = memLimit;
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::QueryExecutor executor(qlever);
@@ -360,12 +354,26 @@ int main(int argc, char* argv[]) {
   // Redirect QLever logging to stderr so only JSON goes to stdout
   ad_utility::setGlobalLoggingStream(&std::cerr);
 
-  if (argc < 2) {
+  // Parse global flags (e.g. --max-memory-in-gb) before dispatching commands.
+  cli_utils::ParsedCliArgs parsed;
+  try {
+    parsed = cli_utils::parseGlobalFlags(argc, argv);
+  } catch (const std::runtime_error& e) {
+    std::cerr << "Error: " << e.what() << "\n";
     printUsage(argv[0]);
     return 1;
   }
 
-  std::string command = argv[1];
+  const auto& args = parsed.remaining;
+  // args[0] is the program name, args[1] is the command.
+  int nargs = static_cast<int>(args.size());
+
+  if (nargs < 2) {
+    printUsage(argv[0]);
+    return 1;
+  }
+
+  std::string command = args[1];
 
   // Handle help flags
   if (command == "--help" || command == "-h" || command == "help") {
@@ -374,23 +382,27 @@ int main(int argc, char* argv[]) {
   }
 
   try {
-    if (command == "query" && (argc == 4 || argc == 5 || argc == 6)) {
+    // Resolve memory limits (stats uses a smaller default).
+    auto memLimit = cli_utils::resolveMemoryLimit(parsed.maxMemoryGb);
+    auto statsMemLimit = cli_utils::resolveMemoryLimit(parsed.maxMemoryGb, 1.0);
+
+    if (command == "query" && (nargs == 4 || nargs == 5 || nargs == 6)) {
       // query <index_basename> <sparql_query> [format] [name]
-      std::string format = (argc >= 5) ? argv[4] : "";
-      std::string name = (argc == 6) ? argv[5] : "";
-      return executeQuery(argv[2], argv[3], format, name);
-    } else if (command == "update" && argc == 4) {
+      std::string format = (nargs >= 5) ? args[4] : "";
+      std::string name = (nargs == 6) ? args[5] : "";
+      return executeQuery(args[2], args[3], memLimit, format, name);
+    } else if (command == "update" && nargs == 4) {
       // update <index_basename> <sparql_update_query>
-      return executeUpdate(argv[2], argv[3]);
-    } else if (command == "query-to-file" && argc == 6) {
-      return executeQueryToFile(argv[2], argv[3], argv[4], argv[5]);
-    } else if (command == "stats" && argc == 3) {
-      return getIndexStats(argv[2]);
-    } else if (command == "build-index" && argc == 3) {
-      return buildIndex(argv[2]);
-    } else if (command == "serialize" && (argc == 4 || argc == 5)) {
-      std::string outputFile = (argc == 5) ? argv[4] : "";
-      return serializeDatabase(argv[2], argv[3], outputFile);
+      return executeUpdate(args[2], args[3], memLimit);
+    } else if (command == "query-to-file" && nargs == 6) {
+      return executeQueryToFile(args[2], args[3], args[4], args[5], memLimit);
+    } else if (command == "stats" && nargs == 3) {
+      return getIndexStats(args[2], statsMemLimit);
+    } else if (command == "build-index" && nargs == 3) {
+      return buildIndex(args[2]);
+    } else if (command == "serialize" && (nargs == 4 || nargs == 5)) {
+      std::string outputFile = (nargs == 5) ? args[4] : "";
+      return serializeDatabase(args[2], args[3], memLimit, outputFile);
     } else {
       printUsage(argv[0]);
       return 1;

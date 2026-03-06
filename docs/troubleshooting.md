@@ -156,6 +156,40 @@ CONSTRUCT/DESCRIBE dispatch.
 
 ---
 
+## Controlling memory usage
+
+### At build time (Docker image compilation)
+
+By default, compilation uses all CPU cores (`nproc`), which can cause the OOM killer to terminate sibling containers.
+
+```bash
+# BUILD_JOBS — limit parallel compiler processes (each can use ~2 GB; set to available RAM / 2)
+docker build --build-arg BUILD_JOBS=4 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
+
+# --memory — hard cap on Docker container RAM during build
+docker build --build-arg BUILD_JOBS=4 --memory=8g -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
+
+# docker compose — set BUILD_JOBS via environment variable
+BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine.yml up
+```
+
+All Dockerfiles (`Dockerfile`, `Dockerfile.cli-only.alpine`, `Dockerfile.cli-only.ubuntu`) support `BUILD_JOBS`.
+
+### At runtime (CLI query/update execution)
+
+QLever's allocator enforces a working-memory budget on all query and update heap allocations. Exceeding it produces a clean error instead of an OOM kill.
+
+```bash
+# --max-memory-in-gb — set working memory limit (default: 4 GB)
+qlever-cli --max-memory-in-gb 2 query ./databases/myindex "SELECT ..."
+qlever-cli --max-memory-in-gb 8 update ./databases/myindex "INSERT DATA { ... }"
+
+# QLEVER_MEMORY_LIMIT_GB — same, via environment variable (--max-memory-in-gb takes precedence)
+QLEVER_MEMORY_LIMIT_GB=2 qlever-cli query ./databases/myindex "SELECT ..."
+```
+
+This controls query/update working memory (joins, sorts, intermediate results, cache). It does **not** control mmap'd index data or fixed metadata structures — those are read from disk and managed by the OS page cache.
+
 ## Note when using Docker on Mac or Windows
 
 When building an index, QLever will create scratch space for on-disc sorting.

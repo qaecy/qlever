@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "cli-utils/CliArgs.h"
 #include "cli-utils/QueryTypeDetect.h"
 #include "cli-utils/StreamSuppressor.h"
 #include "util/MemorySize/MemorySize.h"
@@ -565,4 +566,141 @@ TEST(DetectQueryType, DeleteWhereDetected) {
       "PREFIX ex: <http://example.org/>\n"
       "DELETE WHERE { ex:s ex:p ?o }";
   EXPECT_EQ(cli_utils::detectQueryType(query), "DELETE");
+}
+
+// ============================================================
+// CliArgs – parseGlobalFlags tests
+// ============================================================
+
+namespace {
+// Helper to build a fake argv from a vector of strings.
+struct FakeArgv {
+  std::vector<std::string> storage;
+  std::vector<char*> ptrs;
+
+  explicit FakeArgv(std::initializer_list<std::string> args)
+      : storage(args) {
+    for (auto& s : storage) {
+      ptrs.push_back(s.data());
+    }
+  }
+  int argc() const { return static_cast<int>(ptrs.size()); }
+  char** argv() { return ptrs.data(); }
+};
+}  // namespace
+
+TEST(CliArgs, NoFlagPresent) {
+  FakeArgv a{"qlever-cli", "query", "myindex", "SELECT * { ?s ?p ?o }"};
+  auto parsed = cli_utils::parseGlobalFlags(a.argc(), a.argv());
+  EXPECT_FALSE(parsed.maxMemoryGb.has_value());
+  ASSERT_EQ(parsed.remaining.size(), 4u);
+  EXPECT_EQ(parsed.remaining[0], "qlever-cli");
+  EXPECT_EQ(parsed.remaining[1], "query");
+}
+
+TEST(CliArgs, FlagBeforeCommand) {
+  FakeArgv a{"qlever-cli", "--max-memory-in-gb", "2", "query", "myindex",
+             "SELECT *"};
+  auto parsed = cli_utils::parseGlobalFlags(a.argc(), a.argv());
+  ASSERT_TRUE(parsed.maxMemoryGb.has_value());
+  EXPECT_DOUBLE_EQ(parsed.maxMemoryGb.value(), 2.0);
+  // remaining should be: qlever-cli query myindex SELECT *
+  ASSERT_EQ(parsed.remaining.size(), 4u);
+  EXPECT_EQ(parsed.remaining[1], "query");
+}
+
+TEST(CliArgs, FlagAfterCommand) {
+  FakeArgv a{"qlever-cli", "stats", "--max-memory-in-gb", "0.5", "myindex"};
+  auto parsed = cli_utils::parseGlobalFlags(a.argc(), a.argv());
+  ASSERT_TRUE(parsed.maxMemoryGb.has_value());
+  EXPECT_DOUBLE_EQ(parsed.maxMemoryGb.value(), 0.5);
+  ASSERT_EQ(parsed.remaining.size(), 3u);
+  EXPECT_EQ(parsed.remaining[1], "stats");
+  EXPECT_EQ(parsed.remaining[2], "myindex");
+}
+
+TEST(CliArgs, FractionalValue) {
+  FakeArgv a{"prog", "--max-memory-in-gb", "0.25"};
+  auto parsed = cli_utils::parseGlobalFlags(a.argc(), a.argv());
+  ASSERT_TRUE(parsed.maxMemoryGb.has_value());
+  EXPECT_DOUBLE_EQ(parsed.maxMemoryGb.value(), 0.25);
+}
+
+TEST(CliArgs, MissingValueThrows) {
+  FakeArgv a{"prog", "--max-memory-in-gb"};
+  EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
+               std::runtime_error);
+}
+
+TEST(CliArgs, InvalidValueThrows) {
+  FakeArgv a{"prog", "--max-memory-in-gb", "abc"};
+  EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
+               std::runtime_error);
+}
+
+TEST(CliArgs, NegativeValueThrows) {
+  FakeArgv a{"prog", "--max-memory-in-gb", "-1"};
+  EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
+               std::runtime_error);
+}
+
+TEST(CliArgs, ZeroValueThrows) {
+  FakeArgv a{"prog", "--max-memory-in-gb", "0"};
+  EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
+               std::runtime_error);
+}
+
+TEST(CliArgs, TrailingCharsThrows) {
+  FakeArgv a{"prog", "--max-memory-in-gb", "4abc"};
+  EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
+               std::runtime_error);
+}
+
+// ============================================================
+// CliArgs – resolveMemoryLimit tests
+// ============================================================
+
+TEST(ResolveMemoryLimit, CliOverrideWins) {
+  auto ms = cli_utils::resolveMemoryLimit(2.0);
+  EXPECT_EQ(ms.getBytes(),
+            static_cast<size_t>(2.0 * 1024.0 * 1024.0 * 1024.0));
+}
+
+TEST(ResolveMemoryLimit, DefaultWhenNoOverrideNoEnv) {
+  // Unset the env var to be safe.
+  ::unsetenv("QLEVER_MEMORY_LIMIT_GB");
+  auto ms = cli_utils::resolveMemoryLimit(std::nullopt);
+  EXPECT_EQ(ms.getBytes(),
+            static_cast<size_t>(4.0 * 1024.0 * 1024.0 * 1024.0));
+}
+
+TEST(ResolveMemoryLimit, CustomDefault) {
+  ::unsetenv("QLEVER_MEMORY_LIMIT_GB");
+  auto ms = cli_utils::resolveMemoryLimit(std::nullopt, 1.0);
+  EXPECT_EQ(ms.getBytes(),
+            static_cast<size_t>(1.0 * 1024.0 * 1024.0 * 1024.0));
+}
+
+TEST(ResolveMemoryLimit, EnvVarUsedWhenNoCliOverride) {
+  ::setenv("QLEVER_MEMORY_LIMIT_GB", "8", 1);
+  auto ms = cli_utils::resolveMemoryLimit(std::nullopt);
+  ::unsetenv("QLEVER_MEMORY_LIMIT_GB");
+  EXPECT_EQ(ms.getBytes(),
+            static_cast<size_t>(8.0 * 1024.0 * 1024.0 * 1024.0));
+}
+
+TEST(ResolveMemoryLimit, CliOverrideTakesPrecedenceOverEnv) {
+  ::setenv("QLEVER_MEMORY_LIMIT_GB", "8", 1);
+  auto ms = cli_utils::resolveMemoryLimit(3.0);
+  ::unsetenv("QLEVER_MEMORY_LIMIT_GB");
+  EXPECT_EQ(ms.getBytes(),
+            static_cast<size_t>(3.0 * 1024.0 * 1024.0 * 1024.0));
+}
+
+TEST(ResolveMemoryLimit, MalformedEnvFallsToDefault) {
+  ::setenv("QLEVER_MEMORY_LIMIT_GB", "not-a-number", 1);
+  auto ms = cli_utils::resolveMemoryLimit(std::nullopt);
+  ::unsetenv("QLEVER_MEMORY_LIMIT_GB");
+  EXPECT_EQ(ms.getBytes(),
+            static_cast<size_t>(4.0 * 1024.0 * 1024.0 * 1024.0));
 }
