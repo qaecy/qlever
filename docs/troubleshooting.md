@@ -177,7 +177,7 @@ All Dockerfiles (`Dockerfile`, `Dockerfile.cli-only.alpine`, `Dockerfile.cli-onl
 
 ### At runtime (CLI query/update execution)
 
-QLever's allocator enforces a working-memory budget on all query and update heap allocations. Exceeding it produces a clean error instead of an OOM kill.
+`--max-memory-in-gb` sets a budget on QLever's internal `AllocatorWithLimit`, which tracks heap allocations made during query/update execution (joins, sorts, intermediate results, cache). When the budget is exceeded, the operation fails with a clean `AllocationExceedsLimitException` error instead of the OS killing the process.
 
 ```bash
 # --max-memory-in-gb — set working memory limit (default: 4 GB)
@@ -188,7 +188,22 @@ qlever-cli --max-memory-in-gb 8 update ./databases/myindex "INSERT DATA { ... }"
 QLEVER_MEMORY_LIMIT_GB=2 qlever-cli query ./databases/myindex "SELECT ..."
 ```
 
-This controls query/update working memory (joins, sorts, intermediate results, cache). It does **not** control mmap'd index data or fixed metadata structures — those are read from disk and managed by the OS page cache.
+**What this does and does not prevent:**
+
+| Controlled by `--max-memory-in-gb` | NOT controlled (outside this flag) |
+|---|---|
+| Query/update working memory (joins, sorts, intermediate results) | Index data (mmap'd from disk, managed by OS page cache) |
+| Cache entries | Fixed structures (vocabulary, metadata) loaded at startup |
+| Sort spill-to-disk decisions | Total process RSS |
+
+This means `--max-memory-in-gb` alone does **not** fully prevent OOM. If the index itself is large, the mmap'd pages plus fixed structures can exhaust available RAM before any query runs. For full OOM prevention, combine it with Docker's `--memory` flag as a hard ceiling:
+
+```bash
+# --memory is the hard cap (OS kills if exceeded), --max-memory-in-gb is the soft cap (clean error)
+docker run --memory=4g ... qlever-cli --max-memory-in-gb 2 query ./databases/myindex "SELECT ..."
+```
+
+A good rule of thumb: set `--max-memory-in-gb` to about half the container's `--memory` to leave room for index data and OS overhead.
 
 ## Note when using Docker on Mac or Windows
 

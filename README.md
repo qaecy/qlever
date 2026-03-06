@@ -148,6 +148,37 @@ Alpine image staged: `docker compose -f docker-compose.cli-alpine.yml up`
 Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
 Debian image: `docker build -f Dockerfiles/Dockerfile.cli-only.debian -t qlever-cli:debian .`
 
+### Controlling resource usage
+
+There are three levels of memory/CPU control: compile-time, Docker container, and CLI runtime.
+
+```bash
+# BUILD_JOBS — limit parallel compiler processes (default: all cores via nproc)
+docker build --build-arg BUILD_JOBS=4 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
+
+# --memory / --cpu-quota — cap the Docker container's total RAM and CPU during build
+docker build --build-arg BUILD_JOBS=4 --memory=4g --cpu-quota=200000 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
+
+# BUILD_JOBS via environment variable (docker compose)
+BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine.yml up
+
+# --max-memory-in-gb — limit qlever-cli runtime working memory for queries/updates (default: 4 GB)
+qlever-cli --max-memory-in-gb 2 query ./databases/myindex "SELECT * WHERE { ?s ?p ?o } LIMIT 10"
+
+# QLEVER_MEMORY_LIMIT_GB — same as above but via environment variable (--max-memory-in-gb takes precedence)
+QLEVER_MEMORY_LIMIT_GB=2 qlever-cli query ./databases/myindex "SELECT * WHERE { ?s ?p ?o } LIMIT 10"
+```
+
+| Parameter | When | What it controls | Default |
+|---|---|---|---|
+| `BUILD_JOBS` | `docker build` | Parallel compiler processes | All cores |
+| `--memory` | `docker build/run` | Docker container RAM hard cap (OS kills if exceeded) | Unlimited |
+| `--cpu-quota` | `docker build/run` | Docker container CPU cap | Unlimited |
+| `--max-memory-in-gb` | `qlever-cli` runtime | Query/update working memory via `AllocatorWithLimit` (clean error if exceeded) | 4 GB |
+| `QLEVER_MEMORY_LIMIT_GB` | `qlever-cli` runtime | Same as above, lower precedence | 4 GB |
+
+**Note:** `--max-memory-in-gb` only caps heap allocations during query/update execution (joins, sorts, intermediate results, cache). It does **not** cap mmap'd index data or metadata loaded at startup. For full OOM prevention, combine with Docker's `--memory` as the hard ceiling. See [Troubleshooting](docs/troubleshooting.md#controlling-memory-usage) for details.
+
 ### Build and deploy
 
 ```bash
