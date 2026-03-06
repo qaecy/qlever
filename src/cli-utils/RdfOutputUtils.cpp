@@ -317,7 +317,6 @@ void DatabaseSerializer::serialize(const std::string& format,
   }
   std::cerr << std::endl;
 
-  size_t offset = 0;
   size_t totalTriples = 0;
   auto startTime = std::chrono::steady_clock::now();
   auto lastProgressTime = startTime;
@@ -326,98 +325,93 @@ void DatabaseSerializer::serialize(const std::string& format,
   std::string batchBuffer;
   batchBuffer.reserve(BATCH_SIZE * 200);  // Estimate ~200 chars per triple
 
-  while (true) {
-    // Construct batch query with large LIMIT and OFFSET
-    std::string sparqlQuery;
-    if (format == "nq") {
-      sparqlQuery =
-          "SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } "
-          "ORDER BY ?g ?s ?p ?o LIMIT " +
-          std::to_string(BATCH_SIZE) + " OFFSET " + std::to_string(offset);
-    } else {
-      sparqlQuery = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } "
-                    "ORDER BY ?s ?p ?o LIMIT " +
-                    std::to_string(BATCH_SIZE) + " OFFSET " +
-                    std::to_string(offset);
-    }
+  // Helper lambda: run a batched query and write results
+  auto serializeBatched = [&](const std::string& queryTemplate, bool hasGraph) {
+    size_t localOffset = 0;
+    while (true) {
+      std::string sparqlQuery =
+          queryTemplate + " LIMIT " + std::to_string(BATCH_SIZE) +
+          " OFFSET " + std::to_string(localOffset);
 
-    // Execute batch query (suppress QLever's verbose logging)
-    std::string result;
-    {
-      cli_utils::SuppressStreams suppress;
-      result = qlever_->query(sparqlQuery, ad_utility::MediaType::sparqlJson);
-    }
-
-    // Parse the JSON result
-    nlohmann::json queryResult = nlohmann::json::parse(result);
-
-    if (!queryResult.contains("results") ||
-        !queryResult["results"].contains("bindings")) {
-      break;  // No more results
-    }
-
-    const auto& bindings = queryResult["results"]["bindings"];
-    if (bindings.empty()) {
-      break;  // No more results
-    }
-
-    // Process and write this batch efficiently
-    batchBuffer.clear();
-
-    for (const auto& binding : bindings) {
-      std::string subject = extractValue(binding["s"]);
-      std::string predicate = extractValue(binding["p"]);
-      std::string object = extractValue(binding["o"]);
-
-      if (format == "nt") {
-        batchBuffer.append(subject)
-            .append(" ")
-            .append(predicate)
-            .append(" ")
-            .append(object)
-            .append(" .\n");
-      } else if (format == "nq") {
-        std::string graph =
-            binding.contains("g") ? extractValue(binding["g"]) : "<>";
-        batchBuffer.append(subject)
-            .append(" ")
-            .append(predicate)
-            .append(" ")
-            .append(object)
-            .append(" ")
-            .append(graph)
-            .append(" .\n");
+      std::string result;
+      {
+        cli_utils::SuppressStreams suppress;
+        result = qlever_->query(sparqlQuery, ad_utility::MediaType::sparqlJson);
       }
-      totalTriples++;
+
+      nlohmann::json queryResult = nlohmann::json::parse(result);
+
+      if (!queryResult.contains("results") ||
+          !queryResult["results"].contains("bindings")) {
+        break;
+      }
+
+      const auto& bindings = queryResult["results"]["bindings"];
+      if (bindings.empty()) {
+        break;
+      }
+
+      batchBuffer.clear();
+
+      for (const auto& binding : bindings) {
+        std::string subject = extractValue(binding["s"]);
+        std::string predicate = extractValue(binding["p"]);
+        std::string object = extractValue(binding["o"]);
+
+        batchBuffer.append(subject)
+            .append(" ")
+            .append(predicate)
+            .append(" ")
+            .append(object);
+
+        if (hasGraph) {
+          std::string graph =
+              binding.contains("g") ? extractValue(binding["g"]) : "<>";
+          batchBuffer.append(" ").append(graph);
+        }
+        batchBuffer.append(" .\n");
+        totalTriples++;
+      }
+
+      writeOutput(batchBuffer);
+      flushOutput();
+
+      // Progress logging every 5 seconds
+      auto currentTime = std::chrono::steady_clock::now();
+      if (currentTime - lastProgressTime >= PROGRESS_INTERVAL) {
+        auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                                  currentTime - startTime)
+                                  .count();
+        double triplesPerSecond =
+            elapsedSeconds > 0
+                ? totalTriples / static_cast<double>(elapsedSeconds)
+                : 0;
+
+        std::cerr << "Processed " << totalTriples << " triples ("
+                  << static_cast<int>(triplesPerSecond) << "/sec) "
+                  << "(" << (elapsedSeconds / 60) << "min elapsed)"
+                  << std::endl;
+        lastProgressTime = currentTime;
+      }
+
+      if (bindings.size() < BATCH_SIZE) {
+        break;
+      }
+
+      localOffset += BATCH_SIZE;
     }
+  };
 
-    // Write batch to output
-    writeOutput(batchBuffer);
-    flushOutput();
+  // Serialize default graph triples (valid for both NT and NQ)
+  serializeBatched(
+      "SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o", false);
 
-    // Progress logging every 5 seconds with detailed metrics
-    auto currentTime = std::chrono::steady_clock::now();
-    if (currentTime - lastProgressTime >= PROGRESS_INTERVAL) {
-      auto elapsedSeconds = std::chrono::duration_cast<std::chrono::seconds>(
-                                currentTime - startTime)
-                                .count();
-      double triplesPerSecond =
-          elapsedSeconds > 0
-              ? totalTriples / static_cast<double>(elapsedSeconds)
-              : 0;
-
-      std::cerr << "Processed " << totalTriples << " triples ("
-                << static_cast<int>(triplesPerSecond) << "/sec) "
-                << "(" << (elapsedSeconds / 60) << "min elapsed)" << std::endl;
-      lastProgressTime = currentTime;
-    }
-
-    // If we got fewer results than batch size, we're done
-    if (bindings.size() < BATCH_SIZE) {
-      break;
-    }
-
-    offset += BATCH_SIZE;
+  // For NQ format, also serialize named graph triples with graph column
+  if (format == "nq") {
+    serializeBatched(
+        "SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } "
+        "ORDER BY ?g ?s ?p ?o",
+        true);
   }
 
   // Final statistics

@@ -39,7 +39,10 @@ ARG BUILD_JOBS=0
 WORKDIR /qlever/build/
 RUN cmake -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" -GNinja ..
 RUN if [ "$BUILD_JOBS" = "0" ]; then JOBS=$(nproc); else JOBS=$BUILD_JOBS; fi && \
-    cmake --build . --target qlever-cli qlever-index -- -j$JOBS
+    cmake --build . --target qlever-cli qlever-index CliUtilsTest CliUtilsRdfTest -- -j$JOBS
+
+# Run unit tests — build fails if these fail.
+RUN ./test/CliUtilsTest && ./test/CliUtilsRdfTest
 
 # Runtime stage - very minimal Alpine
 FROM alpine:3.22 AS runtime

@@ -50,6 +50,26 @@ nlohmann::json IndexStatsCollector::collectStats(
   runStatsQuery(response, "tripleCount",
                 "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }");
 
+  // Extract numTriples as a top-level integer for convenience
+  if (response.contains("tripleCount") &&
+      response["tripleCount"].contains("result")) {
+    try {
+      auto resultJson =
+          nlohmann::json::parse(response["tripleCount"]["result"].get<std::string>());
+      if (resultJson.contains("results") &&
+          resultJson["results"].contains("bindings") &&
+          !resultJson["results"]["bindings"].empty()) {
+        auto& binding = resultJson["results"]["bindings"][0];
+        if (binding.contains("count")) {
+          response["numTriples"] =
+              std::stoll(binding["count"]["value"].get<std::string>());
+        }
+      }
+    } catch (...) {
+      // If parsing fails, just skip numTriples
+    }
+  }
+
   // Distinct subjects, predicates, objects
   runStatsQuery(response, "distinctSubjects",
                 "SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { ?s ?p ?o }");

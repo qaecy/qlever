@@ -1,3 +1,0 @@
-docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain build-index \"\$(cat misc/configs/load-ttl-in-named.json)\""
-
-docker run --rm --user root -v $(pwd):/workspace -w /workspace --entrypoint="" qlever-cli:alpine sh -c "/qlever/QleverCliMain query ./databases/schema-ttl-named 'SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ?p ?o } }'"
