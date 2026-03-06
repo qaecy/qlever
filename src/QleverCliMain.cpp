@@ -75,9 +75,9 @@ json createSuccessResponse(const std::string& message) {
 
 void printUsage(const char* programName) {
   std::cerr << "Usage: " << programName
-            << " [--max-memory-in-gb <GB>] <command> [options]\n\n";
+            << " [--allocator-memory-gb <GB>] <command> [options]\n\n";
   std::cerr << "Global options:\n";
-  std::cerr << "  --max-memory-in-gb <GB>  Set memory limit (default: 4 GB, "
+  std::cerr << "  --allocator-memory-gb <GB>  Set memory limit (default: 4 GB, "
                "env: QLEVER_MEMORY_LIMIT_GB)\n\n";
   std::cerr << "Commands:\n";
   std::cerr << "  query       <index_basename> <sparql_query> [output_format] "
@@ -354,7 +354,7 @@ int main(int argc, char* argv[]) {
   // Redirect QLever logging to stderr so only JSON goes to stdout
   ad_utility::setGlobalLoggingStream(&std::cerr);
 
-  // Parse global flags (e.g. --max-memory-in-gb) before dispatching commands.
+  // Parse global flags (e.g. --allocator-memory-gb) before dispatching commands.
   cli_utils::ParsedCliArgs parsed;
   try {
     parsed = cli_utils::parseGlobalFlags(argc, argv);

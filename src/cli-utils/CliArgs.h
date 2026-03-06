@@ -12,7 +12,7 @@
 
 namespace cli_utils {
 
-/// Result of parsing global CLI flags (e.g. --max-memory-in-gb) from argv.
+/// Result of parsing global CLI flags (e.g. --allocator-memory-gb) from argv.
 struct ParsedCliArgs {
   /// If present, the user-specified memory limit in GB.
   std::optional<double> maxMemoryGb;
@@ -20,7 +20,7 @@ struct ParsedCliArgs {
   std::vector<std::string> remaining;
 };
 
-/// Scan `argv` for `--max-memory-in-gb <value>`, extract it, and return the
+/// Scan `argv` for `--allocator-memory-gb <value>`, extract it, and return the
 /// remaining arguments.  Throws `std::runtime_error` on missing or invalid
 /// value (non-numeric, negative, or zero).
 ParsedCliArgs parseGlobalFlags(int argc, char* argv[]);

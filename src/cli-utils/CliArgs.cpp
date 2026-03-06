@@ -15,11 +15,11 @@ ParsedCliArgs parseGlobalFlags(int argc, char* argv[]) {
   ParsedCliArgs result;
   for (int i = 0; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg == "--max-memory-in-gb") {
+    if (arg == "--allocator-memory-gb") {
       if (i + 1 >= argc) {
         throw std::runtime_error(
-            "--max-memory-in-gb requires a numeric value (e.g. "
-            "--max-memory-in-gb 4)");
+            "--allocator-memory-gb requires a numeric value (e.g. "
+            "--allocator-memory-gb 4)");
       }
       std::string valStr = argv[i + 1];
       double val;
@@ -31,12 +31,12 @@ ParsedCliArgs parseGlobalFlags(int argc, char* argv[]) {
         }
       } catch (const std::exception&) {
         throw std::runtime_error(
-            "--max-memory-in-gb: invalid value '" + valStr +
+            "--allocator-memory-gb: invalid value '" + valStr +
             "'. Must be a positive number (e.g. 4 or 0.5).");
       }
       if (val <= 0.0) {
         throw std::runtime_error(
-            "--max-memory-in-gb: value must be positive, got " + valStr);
+            "--allocator-memory-gb: value must be positive, got " + valStr);
       }
       result.maxMemoryGb = val;
       ++i;  // skip the value argument

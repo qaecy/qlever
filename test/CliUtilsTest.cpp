@@ -599,7 +599,7 @@ TEST(CliArgs, NoFlagPresent) {
 }
 
 TEST(CliArgs, FlagBeforeCommand) {
-  FakeArgv a{"qlever-cli", "--max-memory-in-gb", "2", "query", "myindex",
+  FakeArgv a{"qlever-cli", "--allocator-memory-gb", "2", "query", "myindex",
              "SELECT *"};
   auto parsed = cli_utils::parseGlobalFlags(a.argc(), a.argv());
   ASSERT_TRUE(parsed.maxMemoryGb.has_value());
@@ -610,7 +610,7 @@ TEST(CliArgs, FlagBeforeCommand) {
 }
 
 TEST(CliArgs, FlagAfterCommand) {
-  FakeArgv a{"qlever-cli", "stats", "--max-memory-in-gb", "0.5", "myindex"};
+  FakeArgv a{"qlever-cli", "stats", "--allocator-memory-gb", "0.5", "myindex"};
   auto parsed = cli_utils::parseGlobalFlags(a.argc(), a.argv());
   ASSERT_TRUE(parsed.maxMemoryGb.has_value());
   EXPECT_DOUBLE_EQ(parsed.maxMemoryGb.value(), 0.5);
@@ -620,38 +620,38 @@ TEST(CliArgs, FlagAfterCommand) {
 }
 
 TEST(CliArgs, FractionalValue) {
-  FakeArgv a{"prog", "--max-memory-in-gb", "0.25"};
+  FakeArgv a{"prog", "--allocator-memory-gb", "0.25"};
   auto parsed = cli_utils::parseGlobalFlags(a.argc(), a.argv());
   ASSERT_TRUE(parsed.maxMemoryGb.has_value());
   EXPECT_DOUBLE_EQ(parsed.maxMemoryGb.value(), 0.25);
 }
 
 TEST(CliArgs, MissingValueThrows) {
-  FakeArgv a{"prog", "--max-memory-in-gb"};
+  FakeArgv a{"prog", "--allocator-memory-gb"};
   EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
                std::runtime_error);
 }
 
 TEST(CliArgs, InvalidValueThrows) {
-  FakeArgv a{"prog", "--max-memory-in-gb", "abc"};
+  FakeArgv a{"prog", "--allocator-memory-gb", "abc"};
   EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
                std::runtime_error);
 }
 
 TEST(CliArgs, NegativeValueThrows) {
-  FakeArgv a{"prog", "--max-memory-in-gb", "-1"};
+  FakeArgv a{"prog", "--allocator-memory-gb", "-1"};
   EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
                std::runtime_error);
 }
 
 TEST(CliArgs, ZeroValueThrows) {
-  FakeArgv a{"prog", "--max-memory-in-gb", "0"};
+  FakeArgv a{"prog", "--allocator-memory-gb", "0"};
   EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
                std::runtime_error);
 }
 
 TEST(CliArgs, TrailingCharsThrows) {
-  FakeArgv a{"prog", "--max-memory-in-gb", "4abc"};
+  FakeArgv a{"prog", "--allocator-memory-gb", "4abc"};
   EXPECT_THROW(cli_utils::parseGlobalFlags(a.argc(), a.argv()),
                std::runtime_error);
 }

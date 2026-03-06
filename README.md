@@ -162,10 +162,10 @@ docker build --build-arg BUILD_JOBS=4 --memory=4g --cpu-quota=200000 -f Dockerfi
 # BUILD_JOBS via environment variable (docker compose)
 BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine.yml up
 
-# --max-memory-in-gb — limit qlever-cli runtime working memory for queries/updates (default: 4 GB)
-qlever-cli --max-memory-in-gb 2 query ./databases/myindex "SELECT * WHERE { ?s ?p ?o } LIMIT 10"
+# --allocator-memory-gb — limit qlever-cli runtime working memory for queries/updates (default: 4 GB)
+qlever-cli --allocator-memory-gb 2 query ./databases/myindex "SELECT * WHERE { ?s ?p ?o } LIMIT 10"
 
-# QLEVER_MEMORY_LIMIT_GB — same as above but via environment variable (--max-memory-in-gb takes precedence)
+# QLEVER_MEMORY_LIMIT_GB — same as above but via environment variable (--allocator-memory-gb takes precedence)
 QLEVER_MEMORY_LIMIT_GB=2 qlever-cli query ./databases/myindex "SELECT * WHERE { ?s ?p ?o } LIMIT 10"
 ```
 
@@ -174,10 +174,10 @@ QLEVER_MEMORY_LIMIT_GB=2 qlever-cli query ./databases/myindex "SELECT * WHERE { 
 | `BUILD_JOBS` | `docker build` | Parallel compiler processes | All cores |
 | `--memory` | `docker build/run` | Docker container RAM hard cap (OS kills if exceeded) | Unlimited |
 | `--cpu-quota` | `docker build/run` | Docker container CPU cap | Unlimited |
-| `--max-memory-in-gb` | `qlever-cli` runtime | Query/update working memory via `AllocatorWithLimit` (clean error if exceeded) | 4 GB |
+| `--allocator-memory-gb` | `qlever-cli` runtime | Query/update working memory via `AllocatorWithLimit` (clean error if exceeded) | 4 GB |
 | `QLEVER_MEMORY_LIMIT_GB` | `qlever-cli` runtime | Same as above, lower precedence | 4 GB |
 
-**Note:** `--max-memory-in-gb` only caps heap allocations during query/update execution (joins, sorts, intermediate results, cache). It does **not** cap mmap'd index data or metadata loaded at startup. For full OOM prevention, combine with Docker's `--memory` as the hard ceiling. See [Troubleshooting](docs/troubleshooting.md#controlling-memory-usage) for details.
+**Note:** `--allocator-memory-gb` only caps heap allocations during query/update execution (joins, sorts, intermediate results, cache). It does **not** cap mmap'd index data or metadata loaded at startup. For full OOM prevention, combine with Docker's `--memory` as the hard ceiling. See [Troubleshooting](docs/troubleshooting.md#controlling-memory-usage) for details.
 
 ### Build and deploy
 

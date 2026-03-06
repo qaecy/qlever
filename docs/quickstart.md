@@ -35,7 +35,7 @@ docker build --build-arg BUILD_JOBS=4 -t qlever .
 docker build --build-arg BUILD_JOBS=4 --memory=8g -t qlever .
 ```
 
-At runtime, `--max-memory-in-gb` (default 4 GB) limits heap allocations during query/update execution (clean error instead of OOM). It does not cap index loading or mmap'd data — combine with `--memory` for a hard ceiling. See [Troubleshooting](troubleshooting.md#controlling-memory-usage) for the full breakdown.
+At runtime, `--allocator-memory-gb` (default 4 GB) limits heap allocations during query/update execution (clean error instead of OOM). It does not cap index loading or mmap'd data — combine with `--memory` for a hard ceiling. See [Troubleshooting](troubleshooting.md#controlling-memory-usage) for the full breakdown.
 
 ## Get the data
 
