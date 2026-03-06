@@ -5,6 +5,7 @@ cmake-build*
 
 # End-to-End data
 e2e_data/*
+e2e-cli/test-db-extended/
 # Compiled Object files
 *.slo
 *.lo
