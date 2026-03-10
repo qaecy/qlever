@@ -52,6 +52,7 @@ sourcelist
 /cmake-build*
 /localIndices
 
+<<<<<<< HEAD
 # Ignore RDF files in root directory
 /*.nt
 /*.nq
@@ -63,3 +64,11 @@ sourcelist
 
 .claude
 .claude/settings.json
+=======
+# Prevent accidental addition of GitHub Actions workflows
+.github/workflows/
+.github/.DS_Store
+build-alpine/.DS_Store
+e2e-cli/.DS_Store
+*.DS_Store
+>>>>>>> e69a1111 (Binary build works and RDF star is rejected)

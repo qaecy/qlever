@@ -198,6 +198,83 @@ describe('QLever CLI Extended Commands', { timeout: 120000 }, () => {
         expect(result.message).toContain('not necessary');
     });
 
+    // ── binary-rebuild with explicit output path ──────────────
+
+    it('should rebuild to an explicit output basename, leaving original unchanged', () => {
+        const rebuildDir = `${CONTAINER_CWD}/rebuild-explicit`;
+        const localRebuildDir = path.join(LOCAL_DB_DIR, 'rebuild-explicit');
+        fs.mkdirSync(localRebuildDir, { recursive: true });
+        fs.writeFileSync(path.join(localRebuildDir, 'data.nt'),
+            '<http://example.org/rb1> <http://example.org/p> <http://example.org/o1> .\n');
+        const config = JSON.stringify({
+            index_name: "rb-index",
+            index_directory: rebuildDir,
+            input_files: [{ path: `${rebuildDir}/data.nt`, format: "nt" }]
+        });
+        execDocker(`/qlever/qlever-cli build-index '${config.replace(/'/g, "'\\''")}'`);
+
+        // Insert a delta triple
+        const newTriple = '<http://example.org/rb2> <http://example.org/p> <http://example.org/o2> .\n';
+        execDocker(`/qlever/qlever-cli write ${rebuildDir}/rb-index nt -`, newTriple);
+
+        // Rebuild to an explicit output path
+        const outputBase = `${rebuildDir}/rb-index.rebuilt`;
+        const out = execDocker(`/qlever/qlever-cli binary-rebuild ${rebuildDir}/rb-index ${outputBase}`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Binary rebuild completed successfully');
+
+        // Rebuilt index contains both triples
+        const queryOut = execDocker(`/qlever/qlever-cli query ${outputBase} "SELECT ?s WHERE { ?s ?p ?o }" csv`);
+        expect(queryOut).toContain('http://example.org/rb1');
+        expect(queryOut).toContain('http://example.org/rb2');
+
+        // Original index still loads and still sees delta (it was not cleared)
+        const origOut = execDocker(`/qlever/qlever-cli query ${rebuildDir}/rb-index "SELECT ?s WHERE { ?s ?p ?o }" csv`);
+        expect(origOut).toContain('http://example.org/rb1');
+        expect(origOut).toContain('http://example.org/rb2');
+    });
+
+    // ── binary-rebuild in-place (no output path) ──────────────
+
+    it('should rebuild in place, overwrite original files, and clear update-triples', () => {
+        const rebuildDir = `${CONTAINER_CWD}/rebuild-inplace`;
+        const localRebuildDir = path.join(LOCAL_DB_DIR, 'rebuild-inplace');
+        fs.mkdirSync(localRebuildDir, { recursive: true });
+        fs.writeFileSync(path.join(localRebuildDir, 'data.nt'),
+            '<http://example.org/ip1> <http://example.org/p> <http://example.org/o1> .\n');
+        const config = JSON.stringify({
+            index_name: "ip-index",
+            index_directory: rebuildDir,
+            input_files: [{ path: `${rebuildDir}/data.nt`, format: "nt" }]
+        });
+        execDocker(`/qlever/qlever-cli build-index '${config.replace(/'/g, "'\\''")}'`);
+
+        // Insert a delta triple
+        const newTriple = '<http://example.org/ip2> <http://example.org/p> <http://example.org/o2> .\n';
+        execDocker(`/qlever/qlever-cli write ${rebuildDir}/ip-index nt -`, newTriple);
+
+        // Rebuild in place (no output basename)
+        const out = execDocker(`/qlever/qlever-cli binary-rebuild ${rebuildDir}/ip-index`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Binary rebuild completed successfully');
+
+        // No temp files should remain
+        const localFiles = fs.readdirSync(localRebuildDir);
+        const tempFiles = localFiles.filter(f => f.includes('.__rebuild_tmp__'));
+        expect(tempFiles).toHaveLength(0);
+
+        // update-triples file should be absent (no pending deltas after in-place rebuild)
+        const updateTriplesPath = path.join(localRebuildDir, 'ip-index.update-triples');
+        expect(fs.existsSync(updateTriplesPath)).toBe(false);
+
+        // Original index path now contains both triples (delta was materialized)
+        const queryOut = execDocker(`/qlever/qlever-cli query ${rebuildDir}/ip-index "SELECT ?s WHERE { ?s ?p ?o }" csv`);
+        expect(queryOut).toContain('http://example.org/ip1');
+        expect(queryOut).toContain('http://example.org/ip2');
+    });
+
     // ── error handling ─────────────────────────────────────────
 
     it('should fail gracefully with non-existent index for query', () => {

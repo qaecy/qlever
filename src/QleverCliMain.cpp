@@ -99,6 +99,10 @@ void printUsage(const char* programName, std::ostream& out = std::cerr) {
          "statistics\n";
   out << "  binary-rebuild <index_basename> [output_basename]  Merge "
          "delta triples into main index\n";
+  out << "                 If output_basename is omitted, rebuilds in place: "
+         "writes to a temp basename,\n";
+  out << "                 replaces the original index files atomically, and "
+         "clears <index_basename>.update-triples.\n";
   out << "  build-index <json_input>                      Build index "
          "from RDF files\n";
   out << "  serialize   <index_basename> <format> [output_file]  Dump "
@@ -387,7 +391,47 @@ int executeBinaryRebuild(const std::string& indexBasename,
       flushAndExit(0);
     }
 
-    qlever->binaryRebuild(outputBasename);
+    // When no explicit output basename is given, rebuild atomically: write to a
+    // temp basename, then swap the rebuilt files over the originals and clear
+    // the update-triples file.
+    bool inPlaceAtomic = outputBasename.empty();
+    std::string buildTarget =
+        inPlaceAtomic ? (indexBasename + ".__rebuild_tmp__") : outputBasename;
+
+    qlever->binaryRebuild(buildTarget);
+
+    if (inPlaceAtomic) {
+      namespace fs = std::filesystem;
+      fs::path origPath(indexBasename);
+      fs::path dir = origPath.parent_path();
+      if (dir.empty()) dir = fs::path(".");
+      std::string origFilename = origPath.filename().string();
+      std::string tempFilename = origFilename + ".__rebuild_tmp__";
+
+      // Collect all files produced by the rebuild (those with the temp prefix)
+      std::vector<std::pair<fs::path, fs::path>> renames;
+      for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_regular_file()) continue;
+        std::string fname = entry.path().filename().string();
+        if (fname.size() >= tempFilename.size() &&
+            fname.substr(0, tempFilename.size()) == tempFilename) {
+          std::string suffix = fname.substr(tempFilename.size());
+          renames.emplace_back(entry.path(), dir / (origFilename + suffix));
+        }
+      }
+
+      // Delete originals and rename rebuilt files into place
+      for (auto& [src, dst] : renames) {
+        if (fs::exists(dst)) {
+          fs::remove(dst);
+        }
+        fs::rename(src, dst);
+      }
+
+      // Remove the update-triples file to signal no pending delta triples.
+      // An empty file would be read as corrupt binary; absence means "clean".
+      fs::remove(indexBasename + ".update-triples");
+    }
 
     json response;
     response["success"] = true;
@@ -606,7 +650,9 @@ int main(int argc, char* argv[]) {
       return buildIndex(args[2]);
     } else if (command == "binary-rebuild" && (nargs == 3 || nargs == 4)) {
       // binary-rebuild <index_basename> [output_basename]
-      std::string outputBasename = (nargs == 4) ? args[3] : args[2];
+      // When no output_basename is given, use an empty string to signal
+      // atomic in-place rebuild (temp name → swap → clear update-triples).
+      std::string outputBasename = (nargs == 4) ? args[3] : "";
       return executeBinaryRebuild(args[2], outputBasename, memLimit);
     } else if (command == "serialize" && (nargs == 4 || nargs == 5)) {
       std::string outputFile = (nargs == 5) ? args[4] : "";

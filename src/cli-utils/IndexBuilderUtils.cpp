@@ -154,9 +154,6 @@ std::string IndexBuilder::processInputFiles(
       }
     }
 
-    // If filepath is '-', leave as is. Downstream code should detect '-' and
-    // use std::cin directly.
-
     config.inputFiles_.push_back(spec);
   }
   return "";  // Success

@@ -1,4 +1,5 @@
 node_modules
+test-db-extended
 test-db-quads/test-index*
 test-db-quads-no-binary/test-index*
 test-db-triples/test-index*
