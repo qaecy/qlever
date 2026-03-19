@@ -221,6 +221,22 @@ class QleverCliContext {
         std::move(queryStr));
   }
 
+  // Execute a SELECT query and write its result as a materialized view to disk.
+  // The view name must consist only of alphanumerics and hyphens.
+  void writeMaterializedView(const std::string& name,
+                             const std::string& queryString) {
+    auto plan = parseAndPlanQuery(queryString);
+    qlever::QueryPlan qleverPlan =
+        std::make_tuple(plan.qet, plan.qec, plan.parsedQuery);
+    materializedViewsManager_.writeViewToDisk(name, qleverPlan);
+  }
+
+  // Load a previously written materialized view from disk into memory so that
+  // it can be referenced in queries via the magic predicate or SERVICE syntax.
+  void loadMaterializedView(const std::string& name) const {
+    materializedViewsManager_.loadView(name);
+  }
+
   static void validateConfig(const IndexBuilderConfig& config) {
     if (config.kScoringParam_ < 0) {
       throw std::invalid_argument("The value of bm25-k must be >= 0");

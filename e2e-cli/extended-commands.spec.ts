@@ -314,4 +314,66 @@ describe('QLever CLI Extended Commands', { timeout: 120000 }, () => {
         expect(exitCode).not.toBe(0);
         expect(stderr).toContain('Commands:');
     });
+
+    // ── materialized views ─────────────────────────────────────
+
+    it('should write a materialized view and return success JSON', () => {
+        const writeQuery = 'SELECT ?s ?p WHERE { ?s ?p ?o }';
+        const out = execDocker(`/qlever/qlever-cli write-view ${CONTAINER_DB_BASE} sppairs "${writeQuery}"`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+        expect(result.viewName).toBe('sppairs');
+        expect(result.message).toContain('sppairs');
+    });
+
+    it('should query using a written materialized view', () => {
+        // The view was written in the previous test; the query command
+        // auto-loads it from disk via getView() during execution.
+        // Use magic predicate syntax: view:<viewName>-<columnName>
+        // The view name must not contain hyphens (first '-' is the separator).
+        const viewQuery = [
+            'PREFIX view: <https://qlever.cs.uni-freiburg.de/materializedView/>',
+            'SELECT ?s ?p WHERE { ?s view:sppairs-p ?p . }',
+        ].join(' ');
+        const out = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "${viewQuery}" csv`);
+        expect(out).toContain('http://example.org/s1');
+        expect(out).toContain('http://example.org/p1');
+        expect(out).toContain('http://example.org/s2');
+        expect(out).toContain('http://example.org/p2');
+    });
+
+    it('should explicitly load a written materialized view', () => {
+        const out = execDocker(`/qlever/qlever-cli load-view ${CONTAINER_DB_BASE} sppairs`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+        expect(result.viewName).toBe('sppairs');
+        expect(result.message).toContain('sppairs');
+    });
+
+    it('should overwrite an existing materialized view', () => {
+        // Re-writing a view with a different query should succeed and replace it.
+        const writeQuery = 'SELECT ?s ?o WHERE { ?s ?p ?o }';
+        const out = execDocker(`/qlever/qlever-cli write-view ${CONTAINER_DB_BASE} sppairs "${writeQuery}"`);
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+    });
+
+    it('should fail to load a non-existent materialized view', () => {
+        const { exitCode, stderr } = execDockerRaw(`/qlever/qlever-cli load-view ${CONTAINER_DB_BASE} no-such-view`);
+        expect(exitCode).not.toBe(0);
+        // stderr may be prefixed by a Docker platform warning, so extract the
+        // JSON object that the CLI writes rather than parsing the whole string.
+        const jsonMatch = stderr.match(/\{[\s\S]*\}/);
+        expect(jsonMatch).not.toBeNull();
+        const err = JSON.parse(jsonMatch![0]);
+        expect(err.success).toBe(false);
+        expect(err.viewName).toBe('no-such-view');
+    });
+
+    it('should fail write-view with an invalid view name', () => {
+        const { exitCode, stderr } = execDockerRaw(
+            `/qlever/qlever-cli write-view ${CONTAINER_DB_BASE} "bad name!" "SELECT ?s WHERE { ?s ?p ?o }"`
+        );
+        expect(exitCode).not.toBe(0);
+    });
 });

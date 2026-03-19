@@ -110,6 +110,10 @@ void printUsage(const char* programName, std::ostream& out = std::cerr) {
   out << "                                                Formats: nt, nq\n";
   out << "                                                Add .gz to "
          "output_file for compression\n";
+  out << "  write-view  <index_basename> <view_name> <sparql_query>  Execute "
+         "a SELECT query and write result as a materialized view\n";
+  out << "  load-view   <index_basename> <view_name>                Load a "
+         "materialized view from disk (verifies it exists)\n";
   out << "\nJSON input format for query-json:\n";
   out << "{\n";
   out << "  \"indexBasename\": \"path/to/index\",\n";
@@ -485,6 +489,75 @@ int serializeDatabase(const std::string& indexBasename,
   }
 }
 
+int executeWriteView(const std::string& indexBasename,
+                     const std::string& viewName,
+                     const std::string& queryStr,
+                     ad_utility::MemorySize memLimit) {
+  try {
+    qlever::EngineConfig config;
+    config.baseName_ = indexBasename;
+    config.memoryLimit_ = memLimit;
+
+    auto qlever = std::make_shared<qlever::QleverCliContext>(config);
+    {
+      cli_utils::SuppressStreams suppress;
+      qlever->writeMaterializedView(viewName, queryStr);
+    }
+
+    json response;
+    response["success"] = true;
+    response["message"] = "Materialized view '" + viewName + "' written.";
+    response["viewName"] = viewName;
+    response["indexBasename"] = indexBasename;
+    response["timestamp"] =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    std::cout << response.dump() << std::endl;
+    flushAndExit(0);
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    errorResponse["viewName"] = viewName;
+    errorResponse["indexBasename"] = indexBasename;
+    std::cerr << errorResponse.dump() << std::endl;
+    flushAndExit(1);
+  }
+}
+
+int executeLoadView(const std::string& indexBasename,
+                    const std::string& viewName,
+                    ad_utility::MemorySize memLimit) {
+  try {
+    qlever::EngineConfig config;
+    config.baseName_ = indexBasename;
+    config.memoryLimit_ = memLimit;
+
+    auto qlever = std::make_shared<qlever::QleverCliContext>(config);
+    {
+      cli_utils::SuppressStreams suppress;
+      qlever->loadMaterializedView(viewName);
+    }
+
+    json response;
+    response["success"] = true;
+    response["message"] = "Materialized view '" + viewName + "' loaded.";
+    response["viewName"] = viewName;
+    response["indexBasename"] = indexBasename;
+    response["timestamp"] =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    std::cout << response.dump() << std::endl;
+    flushAndExit(0);
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    errorResponse["viewName"] = viewName;
+    errorResponse["indexBasename"] = indexBasename;
+    std::cerr << errorResponse.dump() << std::endl;
+    flushAndExit(1);
+  }
+}
+
 int buildIndex(const std::string& jsonInput) {
   try {
     json input = json::parse(jsonInput);
@@ -657,6 +730,12 @@ int main(int argc, char* argv[]) {
     } else if (command == "serialize" && (nargs == 4 || nargs == 5)) {
       std::string outputFile = (nargs == 5) ? args[4] : "";
       return serializeDatabase(args[2], args[3], memLimit, outputFile);
+    } else if (command == "write-view" && nargs == 5) {
+      // write-view <index_basename> <view_name> <sparql_query>
+      return executeWriteView(args[2], args[3], args[4], memLimit);
+    } else if (command == "load-view" && nargs == 4) {
+      // load-view <index_basename> <view_name>
+      return executeLoadView(args[2], args[3], memLimit);
     } else {
       printUsage(argv[0]);
       return 1;

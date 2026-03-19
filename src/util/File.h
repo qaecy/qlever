@@ -32,14 +32,9 @@ namespace ad_utility {
 //! to the lack of buffering.
 //! Many methods are copies from the CompleteSearch File.h
 class File {
-<<<<<<< HEAD
-public:
-  // Open from an existing FILE* (e.g., stdin). Returns true on success.
-=======
  public:
   // Open from an existing FILE* (e.g., stdin). Does not take ownership of the
   // FILE* — the caller is responsible for not closing it independently.
->>>>>>> e69a1111 (Binary build works and RDF star is rejected)
   bool openFromFilePointer(FILE* file) {
     if (!file) {
       return false;
@@ -48,11 +43,8 @@ public:
     name_ = "<stdin>";
     return true;
   }
-<<<<<<< HEAD
-=======
 
  private:
->>>>>>> e69a1111 (Binary build works and RDF star is rejected)
   using string = std::string;
 
   string name_;
