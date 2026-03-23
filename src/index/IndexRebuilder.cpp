@@ -25,11 +25,9 @@
 #include <tuple>
 #include <vector>
 
-#include "absl/cleanup/cleanup.h"
 #include "backports/algorithm.h"
 #include "engine/idTable/IdTable.h"
 #include "global/Id.h"
-#include "global/RuntimeParameters.h"
 #include "index/IndexImpl.h"
 #include "index/IndexRebuilderImpl.h"
 #include "index/LocalVocabEntry.h"
@@ -191,10 +189,13 @@ ad_utility::InputRangeTypeErased<IdTableStatic<0>> readIndexAndRemap(
       *locatedTriplesSharedState, LimitOffsetClause{});
 
   auto remapId = [&insertionPositions, &localVocabMapping, &blankNodeBlocks,
-                  minBlankNodeIndex](Id& id) {
-    // TODO<RobinTF> Experiment with caching the last remapped id
-    // and reusing it if the same id appears again. See if that
-    // improves performance or if it makes it worse.
+                  minBlankNodeIndex, lastId = Id::makeUndefined(),
+                  mappedId = Id::makeUndefined()](Id& id) mutable {
+    if (lastId.getBits() == id.getBits()) {
+      id = mappedId;
+      return;
+    }
+    lastId = id;
     using enum Datatype;
     auto datatype = id.getDatatype();
     if (datatype == VocabIndex) [[likely]] {
@@ -204,13 +205,13 @@ ad_utility::InputRangeTypeErased<IdTableStatic<0>> readIndexAndRemap(
     } else if (datatype == BlankNodeIndex) {
       id = remapBlankNodeId(id, blankNodeBlocks, minBlankNodeIndex);
     }
+    mappedId = id;
   };
 
   return ad_utility::InputRangeTypeErased{
       ad_utility::CachingTransformInputRange{
           std::move(fullScan),
           [remapId = std::move(remapId)](IdTable& idTable) {
-            // TODO<RobinTF> process columns in parallel.
             auto allCols = idTable.getColumns();
             // Extra columns beyond the graph column only contain integers (or
             // undefined for triples added via UPDATE) and thus don't need to be
@@ -219,7 +220,7 @@ ad_utility::InputRangeTypeErased<IdTableStatic<0>> readIndexAndRemap(
             for (auto col : allCols | ::ranges::views::take(REGULAR_COLUMNS)) {
               ql::ranges::for_each(col, remapId);
             }
-            AD_CORRECTNESS_CHECK(ql::ranges::all_of(
+            AD_EXPENSIVE_CHECK(ql::ranges::all_of(
                 allCols | ::ranges::views::drop(REGULAR_COLUMNS), [](auto col) {
                   return ql::ranges::all_of(col, [](Id id) {
                     return id.getDatatype() == Datatype::Int ||
@@ -288,23 +289,13 @@ boost::asio::awaitable<void> createPermutationWriterTask(
           *locatedTriplesSharedState);
       auto [numColumns, additionalColumns] =
           getNumberOfColumnsAndAdditionalColumns(blockMetadataRanges);
-      // TEMPORARY FIX: Use only 1 thread per writer to avoid starvation
-      // during binary-rebuild (~170 threads total otherwise).
-      // TODO: Remove after #2696 or equivalent.
-      constexpr size_t REBUILD_THREADS = 1;
-
-      AD_LOG_INFO << "Starting rebuild for " << permutation.readableName()
-                  << (isInternal ? " (internal)" : "") << " ..." << std::endl;
-      auto result = newIndex.createPermutationWithoutMetadata(
+      return newIndex.createPermutationWithoutMetadata(
           numColumns,
           readIndexAndRemap(
               permutation, blockMetadataRanges, locatedTriplesSharedState,
               localVocabMapping, insertionPositions, blankNodeBlocks,
               minBlankNodeIndex, cancellationHandle, additionalColumns),
-          permutation, isInternal, REBUILD_THREADS);
-      AD_LOG_INFO << "Finished rebuild for " << permutation.readableName()
-                  << (isInternal ? " (internal)" : "") << std::endl;
-      return result;
+          permutation, isInternal);
     };
   };
   auto taskA =
@@ -384,11 +375,7 @@ void materializeToIndex(
   auto patternThreads = static_cast<size_t>(index.usePatterns());
   size_t numberOfPermutations = index.hasAllPermutations() ? 8 : 4;
   namespace net = boost::asio;
-  // TEMPORARY FIX: Use 10 threads for the ASIO pool to avoid deadlocks.
-  // The number of concurrent writer tasks is limited by the number of
-  // permutations.
-  // TODO: Remove after #2696 or equivalent.
-  net::thread_pool threadPool{10};
+  net::thread_pool threadPool{patternThreads + numberOfPermutations};
 
   if (index.usePatterns()) {
     net::post(threadPool, [&newIndex, &index, &insertionPositions]() {
@@ -411,17 +398,6 @@ void materializeToIndex(
     permutationSettings.push_back({{SPO, SOP}, false});
     permutationSettings.push_back({{OPS, OSP}, false});
   }
-
-  // TEMPORARY FIX: Avoid thread starvation by limiting lazy index scan threads.
-  // We use 1 thread to avoid potential deadlocks in pull-based scanning.
-  // TODO: Remove after #2696 or equivalent.
-  auto originalLazyThreads =
-      getRuntimeParameter<&::RuntimeParameters::lazyIndexScanNumThreads_>();
-  setRuntimeParameter<&::RuntimeParameters::lazyIndexScanNumThreads_>(1);
-  absl::Cleanup restoreThreads = [originalLazyThreads]() {
-    setRuntimeParameter<&::RuntimeParameters::lazyIndexScanNumThreads_>(
-        originalLazyThreads);
-  };
 
   for (const auto& [permutationEnums, isInternal] : permutationSettings) {
     auto [a, b] = permutationEnums;

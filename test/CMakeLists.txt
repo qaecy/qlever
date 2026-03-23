@@ -138,7 +138,7 @@ if (NOT _DISABLE_EMSCRIPTEN_PROBLEMATIC_TESTS)
 
     addLinkAndDiscoverTest(UrlParserTest)
 
-    addLinkAndDiscoverTest(GraphStoreProtocolTest engine)
+    addLinkAndDiscoverTest(GraphStoreProtocolTest engine server)
 
     addLinkAndDiscoverTest(ParsedRequestBuilderTest engine)
 
@@ -179,7 +179,7 @@ addLinkAndDiscoverTestSerial(IdTripleTest index)
 
 addLinkAndDiscoverTestSerial(DeltaTriplesTest index)
 
-addLinkAndDiscoverTest(DeltaTriplesCountTest index)
+addLinkAndDiscoverTest(UpdateMetadataTest index)
 
 addLinkAndDiscoverTest(EngineTest engine)
 
@@ -476,6 +476,8 @@ addLinkAndDiscoverTest(ValueGetterTest engine)
 
 addLinkAndDiscoverTest(LruCacheTest)
 
+addLinkAndDiscoverTest(LruCacheWithStatisticsTest)
+
 addLinkAndDiscoverTestNoLibs(InputRangeUtilsTest)
 
 addLinkAndDiscoverTest(TripleSerializerTest)
@@ -503,3 +505,6 @@ addLinkAndDiscoverTestNoLibs(VariantRangeFilterTest)
 addLinkAndDiscoverTest(CliUtilsTest cliUtilsLight)
 
 addLinkAndDiscoverTest(CliUtilsRdfTest cliUtils)
+
+addLinkAndDiscoverTest(ConstructTemplatePreprocessorTest engine)
+

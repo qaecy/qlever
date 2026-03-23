@@ -5,6 +5,8 @@
 #ifndef QLEVER_SRC_INDEX_COMPRESSEDRELATION_H
 #define QLEVER_SRC_INDEX_COMPRESSEDRELATION_H
 
+#include <gtest/gtest_prod.h>
+
 #include <vector>
 
 #include "backports/algorithm.h"
@@ -303,10 +305,7 @@ class CompressedRelationWriter {
   Id currentCol0Id_ = Id::makeUndefined();
   size_t currentRelationPreviousSize_ = 0;
 
-  // TEMPORARY FIX: Allow limiting the number of threads to avoid starvation
-  // in high-pressure contexts like binary-rebuild.
-  // TODO: Remove this once #2696 or equivalent is merged upstream.
-  ad_utility::TaskQueue<false> blockWriteQueue_;
+  ad_utility::TaskQueue<false> blockWriteQueue_ = makeBlockWriteQueue();
   ad_utility::timer::ThreadSafeTimer blockWriteQueueTimer_;
 
   // This callback is invoked for each block of small relations (which share the
@@ -323,12 +322,10 @@ class CompressedRelationWriter {
   /// Create using a filename, to which the relation data will be written.
   explicit CompressedRelationWriter(
       size_t numColumns, ad_utility::File f,
-      ad_utility::MemorySize uncompressedBlocksizePerColumn,
-      size_t numThreads = 10)
+      ad_utility::MemorySize uncompressedBlocksizePerColumn)
       : outfile_{std::move(f)},
         numColumns_{numColumns},
-        uncompressedBlocksizePerColumn_{uncompressedBlocksizePerColumn},
-        blockWriteQueue_{20, numThreads} {}
+        uncompressedBlocksizePerColumn_{uncompressedBlocksizePerColumn} {}
   // Two helper types used to make the interface of the function
   // `createPermutationPair` below safer and more explicit.
   using MetadataCallback =
@@ -526,6 +523,13 @@ class CompressedRelationWriter {
                    std::vector<CompressedRelationMetadata>>
   compressedRelationTestWriteCompressedRelations(
       T inputs, std::string filename, ad_utility::MemorySize blocksize);
+
+  // Create a `TaskQueue` for the compression and writing of blocks. The number
+  // of threads is determined by the runtime parameter
+  // "permutation-writer-num-threads".
+  static ad_utility::TaskQueue<false> makeBlockWriteQueue();
+  FRIEND_TEST(CompressedRelationWriter,
+              isInitializedWithCorrectNumberOfThreads);
 };
 
 using namespace std::string_view_literals;
@@ -563,6 +567,9 @@ class CompressedRelationReader {
     // triples from `desiredGraphs_` and therefore doesn't have to be read from
     // disk, and if this fact can be determined by `blockMetadata` alone.
     bool canBlockBeSkipped(const CompressedBlockMetadata& blockMetadata) const;
+
+    // Delete the `graphColumn_` from `block` if `deleteGraphColumn_` is true.
+    void deleteGraphColumnIfNecessary(IdTable& block) const;
 
    private:
     // Return a lambda that returns true if `desiredGraphs_` allows the given

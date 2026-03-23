@@ -7,11 +7,7 @@
 
 // _________________________________________________________________________
 void ParallelFileBuffer::open(const std::string& filename) {
-  if (filename == "-") {
-    file_.openFromFilePointer(stdin);
-  } else {
-    file_.open(filename, "r");
-  }
+  file_.open(filename, "r");
   eof_ = false;
   buf_.resize(blocksize_);
   auto task = [&file = this->file_, bs = this->blocksize_,

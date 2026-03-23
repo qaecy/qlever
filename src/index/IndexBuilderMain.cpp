@@ -15,9 +15,9 @@
 #include <string>
 
 #include "CompilationInfo.h"
-#include "QleverCliContext.h"
 #include "global/Constants.h"
 #include "index/ConstantsIndexBuilding.h"
+#include "libqlever/Qlever.h"
 #include "util/ProgramOptionsHelpers.h"
 #include "util/ReadableNumberFacet.h"
 #include "util/json.h"
@@ -309,7 +309,8 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  AD_LOG_INFO << EMPH_ON << "QLever index builder, compiled on "
+  AD_LOG_INFO << EMPH_ON << "QLever index builder "
+              << qlever::version::ProjectVersion << ", compiled on "
               << qlever::version::DatetimeOfCompilation << " using git hash "
               << qlever::version::GitShortHash << EMPH_OFF << std::endl;
 

@@ -1,4 +1,3 @@
-  // ...existing code...
 // Copyright 2011, University of Freiburg, Chair of Algorithms and Data
 // Structures.
 // Author: Björn Buchhold <buchholb>
@@ -32,18 +31,6 @@ namespace ad_utility {
 //! to the lack of buffering.
 //! Many methods are copies from the CompleteSearch File.h
 class File {
- public:
-  // Open from an existing FILE* (e.g., stdin). Does not take ownership of the
-  // FILE* — the caller is responsible for not closing it independently.
-  bool openFromFilePointer(FILE* file) {
-    if (!file) {
-      return false;
-    }
-    file_ = file;
-    name_ = "<stdin>";
-    return true;
-  }
-
  private:
   using string = std::string;
 
