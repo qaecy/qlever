@@ -76,6 +76,51 @@ git fetch upstream
 git merge upstream/master
 ```
 
+If there are merge conflicts use the following prompt with an LLM to resolve:
+```
+This repo extends the QLever quad store (https://github.com/ad-freiburg/qlever)
+with a CLI tool (`qlever-cli`). The upstream repo is the source of truth for all
+engine/parser/util/test/workflow code. Resolve all merge conflicts with the
+following rules:
+
+1. README.md — always keep OUR version (this repo's README overrides upstream).
+
+2. All other conflicted files — take UPSTREAM (theirs) as the base, then
+   re-apply the following repo-specific additions if they were lost:
+
+   CMakeLists.txt
+   - add_subdirectory(src/cli-utils) alongside the other add_subdirectory calls
+   - add_executable(qlever-cli src/QleverCliMain.cpp) with
+     qlever_target_link_libraries(qlever-cli cliUtils engine index parser util
+     ${CMAKE_THREAD_LIBS_INIT} Boost::program_options compilationInfo global)
+     placed just before the CPack section
+
+   test/CMakeLists.txt
+   - addLinkAndDiscoverTest(CliUtilsTest cliUtilsLight)
+   - addLinkAndDiscoverTest(CliUtilsRdfTest cliUtils)
+
+   .gitignore — append after the upstream content:
+   - build-alpine/
+   - e2e-cli/test-db-extended/
+   - /*.nt /*.nq /*.ttl /*.trig /*.nq.gz
+   - .DS_Store / *.DS_Store
+   - .claude / .claude/settings.json
+
+   src/parser/RdfParser.cpp — two RDF* detection hunks must be present:
+   a) In TurtleParser<T>::iriref(), immediately after the
+      `if (!ql::starts_with(view, '<')) { return false; }` guard, add:
+        if (view.size() > 1 && view[1] == '<') {
+          raise("Found RDF* syntax ('<<')...");
+        }
+   b) In RdfStreamParser<T>::getLineImpl(), inside the
+      `if (byteVec_.size() > BZIP2_MAX_TOTAL_BUFFER_SIZE)` block, before the
+      generic AD_LOG_ERROR, add:
+        if (d.size() > 1 && d[0] == '<' && d[1] == '<') {
+          throw std::runtime_error("Found RDF* syntax ('<<')...");
+        }
+   The error messages must contain the string "RDF*" (the e2e test checks this).
+```
+
 ## Build
 
 Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`

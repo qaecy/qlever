@@ -888,6 +888,15 @@ bool TurtleParser<T>::iriref() {
   if (!ql::starts_with(view, '<')) {
     return false;
   }
+  // Detect RDF* (embedded triple) syntax: '<<' marks a triple used as a
+  // subject or object, which is not supported during index building.
+  if (view.size() > 1 && view[1] == '<') {
+    raise(
+        "Found RDF* syntax ('<<'): a triple is used as a subject or object. "
+        "RDF* (also called RDF-star or embedded triples) is currently not "
+        "supported when building the QLever index. Please convert your input "
+        "to plain RDF (Turtle/N-Triples) without embedded triples.");
+  }
   auto endPos = view.find_first_of("<>\"\n", 1);
   if (endPos == std::string::npos || view[endPos] != '>') {
     raise(
@@ -1030,6 +1039,16 @@ bool RdfStreamParser<T>::getLineImpl(TurtleTriple* triple) {
           // we have successfully extended our buffer
           if (byteVec_.size() > BZIP2_MAX_TOTAL_BUFFER_SIZE) {
             auto d = tok_.view();
+            if (d.size() > 1 && d[0] == '<' && d[1] == '<') {
+              // The parser is stuck on RDF* syntax; give a targeted error
+              // instead of the generic buffer-overflow message.
+              throw std::runtime_error(
+                  "Found RDF* syntax ('<<'): a triple is used as a subject "
+                  "or object. RDF* (also called RDF-star or embedded triples) "
+                  "is currently not supported when building the QLever index. "
+                  "Please convert your input to plain RDF (Turtle/N-Triples) "
+                  "without embedded triples.");
+            }
             AD_LOG_ERROR << "Could not parse " << PARSER_MIN_TRIPLES_AT_ONCE
                          << " Within " << (BZIP2_MAX_TOTAL_BUFFER_SIZE >> 10)
                          << "MB of Turtle input\n";
