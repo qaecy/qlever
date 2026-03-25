@@ -55,6 +55,7 @@ build-alpine/
 
 # CLI e2e test database
 e2e-cli/test-db-extended/
+e2e-cli/test-db-stdin/
 
 # Ignore RDF files in root directory
 /*.nt

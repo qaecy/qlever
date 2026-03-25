@@ -119,6 +119,31 @@ following rules:
           throw std::runtime_error("Found RDF* syntax ('<<')...");
         }
    The error messages must contain the string "RDF*" (the e2e test checks this).
+
+   src/util/File.h — the `openFromFilePointer` public method must be present.
+   Add it at the top of the `public:` section (before the default constructor):
+     // Open from an existing FILE* (e.g., stdin). Does not take ownership of
+     // the FILE* — the caller is responsible for not closing it independently.
+     bool openFromFilePointer(FILE* file) {
+       if (!file) { return false; }
+       file_ = file;
+       name_ = "<stdin>";
+       return true;
+     }
+   The class must have `public:` before this method and `private:` before the
+   `using string = std::string;` member (upstream has `private:` first, which
+   must be swapped). Without this the index builder cannot read from stdin
+   (producing "No such device or address" on /dev/stdin inside Docker).
+
+   src/parser/ParallelBuffer.cpp — the `open()` method must handle "-" as stdin.
+   Replace `file_.open(filename, "r");` with:
+     if (filename == "-") {
+       file_.openFromFilePointer(stdin);
+     } else {
+       file_.open(filename, "r");
+     }
+   This allows `build-index` to accept `-` as the input file path and read data
+   piped to stdin instead of failing with "No such device or address".
 ```
 
 ## Build
