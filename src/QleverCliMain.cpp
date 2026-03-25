@@ -293,7 +293,7 @@ int executeWriteOrDelete(const std::string& indexBasename,
                                ": " + format + ". Use ttl, nt, or nq.");
     }
 
-    std::string actualInputFile = (inputFile == "-") ? "/dev/stdin" : inputFile;
+    std::string actualInputFile = inputFile;  // "-" is handled by ParallelBuffer (maps to stdin)
 
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;

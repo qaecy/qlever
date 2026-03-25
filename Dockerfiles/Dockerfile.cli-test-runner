@@ -1,0 +1,18 @@
+# Test-runner image for qlever-cli e2e tests.
+#
+# Built on top of qlever-cli:alpine-test so that every shared library the
+# qlever-cli binary needs (jemalloc, boost, ICU 76, zstd, …) is already
+# present and version-matched.  Node.js + npm are added so that vitest can
+# run the TypeScript spec files.
+#
+# Build (after image-builder has produced qlever-cli:alpine-test):
+#   docker compose -f docker-compose.cli-alpine.yml build test-runner
+#
+# Run:
+#   docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
+FROM qlever-cli:alpine-test
+
+RUN apk add --no-cache nodejs npm
+
+ENTRYPOINT []
+CMD ["sh", "-c", "npm install && npx vitest run"]

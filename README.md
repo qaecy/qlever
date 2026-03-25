@@ -26,20 +26,18 @@ If the command completes successfully, all CLI commands work and you have a read
 # 1. Build + unit tests + produce runtime image
 docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine-test .
 
-# 2. Run e2e integration tests
-cd e2e-cli && npm install && npx vitest run && cd ..
-
-# 1. and 2.
-docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine-test . && \
-cd e2e-cli && npm install && npx vitest run && cd ..
-
-# 3. Extract the binary
+# 2. Extract the binary (required for e2e tests — mounted at /workspace/qlever-cli)
 docker run --rm --entrypoint="" qlever-cli:alpine-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+
+# 3. Run e2e integration tests (inside a linux/amd64 container with the correct runtime libs)
+docker compose -f docker-compose.cli-alpine.yml build test-runner
+docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
 
 # 1., 2. and 3.
 docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine-test . && \
-cd e2e-cli && npm install && npx vitest run && cd .. && \
-docker run --rm --entrypoint="" qlever-cli:alpine-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+docker run --rm --entrypoint="" qlever-cli:alpine-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli && \
+docker compose -f docker-compose.cli-alpine.yml build test-runner && \
+docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
 ```
 
 ### Ubuntu
@@ -47,20 +45,20 @@ docker run --rm --entrypoint="" qlever-cli:alpine-test cat /qlever/qlever-cli > 
 # 1. Build + unit tests + produce runtime image
 docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu-test .
 
-# 2. Run e2e integration tests
-cd e2e-cli && npm install && npx vitest run && cd ..
-
-# 1. and 2.
-docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu-test . && \
-cd e2e-cli && npm install && npx vitest run && cd ..
-
-# 3. Extract the binary
+# 2. Extract the binary
 docker run --rm --entrypoint="" qlever-cli:ubuntu-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+
+# 3. Run e2e integration tests
+# Note: Ubuntu uses the same Alpine-based test-runner container (see docker-compose.cli-alpine.yml).
+# Ensure qlever-cli has been extracted to the repo root (step 2) before running.
+docker compose -f docker-compose.cli-alpine.yml build test-runner
+docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
 
 # 1., 2. and 3.
 docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu-test . && \
-cd e2e-cli && npm install && npx vitest run && cd .. && \
-docker run --rm --entrypoint="" qlever-cli:ubuntu-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli
+docker run --rm --entrypoint="" qlever-cli:ubuntu-test cat /qlever/qlever-cli > qlever-cli && chmod +x qlever-cli && \
+docker compose -f docker-compose.cli-alpine.yml build test-runner && \
+docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
 ```
 
 ## Use
@@ -144,6 +142,13 @@ following rules:
      }
    This allows `build-index` to accept `-` as the input file path and read data
    piped to stdin instead of failing with "No such device or address".
+
+   src/QleverCliMain.cpp — in `executeWriteOrDelete`, do NOT convert "-" to
+   "/dev/stdin". The line must be:
+     std::string actualInputFile = inputFile;  // "-" is handled by ParallelBuffer
+   (NOT: `(inputFile == "-") ? "/dev/stdin" : inputFile`)
+   Without this, `write -` and `delete -` fail on Alpine Docker where
+   /dev/stdin is not fopen()-able as a regular file.
 ```
 
 ## Build

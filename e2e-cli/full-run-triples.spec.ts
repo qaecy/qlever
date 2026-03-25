@@ -1,10 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { execSync } from 'child_process';
+import { createExecHelpers } from './test-utils';
 import * as fs from 'fs';
 import * as path from 'path';
-
-// Using the container image defined in README or from user's latest local build
-const IMAGE_NAME = 'qlever-cli:alpine-test';
 
 // Local and container paths
 const LOCAL_E2E_DIR = path.resolve(__dirname);
@@ -41,39 +38,19 @@ describe('QLever CLI E2E Flow Triples', { timeout: 120000 }, () => {
         fs.writeFileSync(path.join(LOCAL_DB_DIR, 'build-config.json'), JSON.stringify(config));
     });
 
-    const execDocker = (cmd: string, inputString?: string) => {
-        // Escape single quotes for the sh -c argument
-        const escapedCmd = cmd.replace(/'/g, "'\\''");
-        const fullCmd = `docker run --init --rm --user root ${inputString ? '-i' : ''} -v "${WORKSPACE_DIR}":/workspace -w ${CONTAINER_CWD} --entrypoint="" ${IMAGE_NAME} sh -c '${escapedCmd} && sync'`;
-        console.log(`[DEBUG] Executing: ${fullCmd}`);
-        try {
-            const start = Date.now();
-            const out = execSync(fullCmd, {
-                encoding: 'utf-8',
-                cwd: WORKSPACE_DIR,
-                input: inputString ? inputString : undefined,
-                maxBuffer: 10 * 1024 * 1024, // 10MB
-            });
-            return out;
-        } catch (error: any) {
-            console.error(`Error running command: ${fullCmd}`);
-            if (error.stdout) console.error(`Stdout: ${error.stdout}`);
-            if (error.stderr) console.error(`Stderr: ${error.stderr}`);
-            throw error;
-        }
-    };
+    const { execDocker } = createExecHelpers(CONTAINER_CWD, WORKSPACE_DIR);
 
     it('should build the index', () => {
         const configData = fs.readFileSync(path.join(LOCAL_DB_DIR, 'build-config.json'), 'utf-8');
         // Using single quotes means double quotes are safe, but we must escape single quotes as needed
         const escapedConfig = configData;
-        const out = execDocker(`/qlever/qlever-cli build-index '${escapedConfig.replace(/'/g, "'\\''")}'`);
+        const out = execDocker(`/workspace/qlever-cli build-index '${escapedConfig.replace(/'/g, "'\\''")}'`);
         expect(out).toContain('Index built successfully');
     });
 
     it('should query the initial data', () => {
         // Request csv format to make it easy to assert
-        const out = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
+        const out = execDocker(`/workspace/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
         const lines = out.trim().split('\n');
         expect(lines.length).toBeGreaterThanOrEqual(2); // Header + at least 1 row
         expect(lines[0]).toBe('s,p,o');
@@ -82,14 +59,14 @@ describe('QLever CLI E2E Flow Triples', { timeout: 120000 }, () => {
 
     it('should insert new data via stream (write command)', () => {
         const newData = '<http://example.org/inserted> <http://example.org/p> <http://example.org/o> .\n';
-        const out = execDocker(`/qlever/qlever-cli write ${CONTAINER_DB_BASE} nt -`, newData);
+        const out = execDocker(`/workspace/qlever-cli write ${CONTAINER_DB_BASE} nt -`, newData);
         const result = JSON.parse(out);
         expect(result.success).toBe(true);
         expect(result.message).toContain('Inserted 1 triples successfully');
     });
 
     it('should query to confirm insertion', () => {
-        const out = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
+        const out = execDocker(`/workspace/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
         const lines = out.trim().split('\n');
         // Header + initial + inserted = 3 lines
         expect(lines.length).toBe(3);
@@ -99,13 +76,13 @@ describe('QLever CLI E2E Flow Triples', { timeout: 120000 }, () => {
     });
 
     it('should merge delta triples in with binary build', () => {
-        const out = execDocker(`/qlever/qlever-cli binary-rebuild '${CONTAINER_DB_BASE}' '${CONTAINER_DB_BASE}.rebuilt'`);
+        const out = execDocker(`/workspace/qlever-cli binary-rebuild '${CONTAINER_DB_BASE}' '${CONTAINER_DB_BASE}.rebuilt'`);
         const result = JSON.parse(out);
         expect(result.success).toBe(true);
         expect(result.message).toContain('Binary rebuild completed successfully');
 
         // Query the rebuilt index to confirm data is there
-        const queryOut = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE}.rebuilt "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
+        const queryOut = execDocker(`/workspace/qlever-cli query ${CONTAINER_DB_BASE}.rebuilt "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
         const lines = queryOut.trim().split('\n');
         expect(lines.length).toBe(3);
         expect(queryOut).toContain('http://example.org/initial,http://example.org/p,http://example.org/o');
@@ -114,14 +91,14 @@ describe('QLever CLI E2E Flow Triples', { timeout: 120000 }, () => {
 
     it('should delete the original data via stream (delete command)', () => {
         const deleteData = '<http://example.org/initial> <http://example.org/p> <http://example.org/o> .\n';
-        const out = execDocker(`/qlever/qlever-cli delete ${CONTAINER_DB_BASE} nt -`, deleteData);
+        const out = execDocker(`/workspace/qlever-cli delete ${CONTAINER_DB_BASE} nt -`, deleteData);
         const result = JSON.parse(out);
         expect(result.success).toBe(true);
         expect(result.message).toContain('Deleted 1 triples successfully');
     });
 
     it('should query and conclude that only the inserted data remains', () => {
-        const out = execDocker(`/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
+        const out = execDocker(`/workspace/qlever-cli query ${CONTAINER_DB_BASE} "SELECT ?s ?p ?o WHERE { ?s ?p ?o }" csv`);
         const lines = out.trim().split('\n');
         console.log("YYY")
         console.log(lines);

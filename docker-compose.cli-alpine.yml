@@ -29,3 +29,27 @@ services:
       context: .
       dockerfile: Dockerfiles/Dockerfile.cli-test-image
     image: qlever-cli:alpine-test
+
+  # Runs the vitest e2e suite inside a linux/amd64 container that has both the
+  # qlever-cli runtime libraries (jemalloc, boost, ICU 76, …) AND Node.js, so
+  # the binary mounted at /workspace/qlever-cli is directly executable.
+  #
+  # Prerequisites:
+  #   1. Build the runtime image:
+  #        docker compose -f docker-compose.cli-alpine.yml run --rm image-builder
+  #   2. Build the test-runner image (once, or after Dockerfile changes):
+  #        docker compose -f docker-compose.cli-alpine.yml build test-runner
+  #   3. Run the tests:
+  #        docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfiles/Dockerfile.cli-test-runner
+    image: qlever-cli:test-runner
+    platform: linux/amd64
+    user: root
+    working_dir: /workspace/e2e-cli
+    volumes:
+      - .:/workspace
+    environment:
+      - QLEVER_DIRECT_EXEC=1

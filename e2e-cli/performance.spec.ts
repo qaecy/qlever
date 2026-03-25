@@ -22,7 +22,8 @@ import * as path from 'path';
 
 // ── constants ──────────────────────────────────────────────────────────────
 
-const IMAGE_NAME = 'qlever-cli:alpine-test';
+const IMAGE_NAME = process.env.QLEVER_TEST_IMAGE ?? 'alpine:3';
+const DIRECT_EXEC = process.env.QLEVER_DIRECT_EXEC === '1';
 const LOCAL_E2E_DIR = path.resolve(__dirname);
 const LOCAL_DB_DIR = path.join(LOCAL_E2E_DIR, 'test-db-perf-large');
 const WORKSPACE_DIR = path.resolve(__dirname, '..');
@@ -69,10 +70,22 @@ function downloadFile(dest: string): void {
  */
 const execDockerRaw = (cmd: string) => {
     const escapedCmd = cmd.replace(/'/g, "'\\''");
+    if (DIRECT_EXEC) {
+        const result = spawnSync('sh', ['-c', escapedCmd], {
+            encoding: 'utf-8',
+            cwd: CONTAINER_CWD,
+            maxBuffer: 20 * 1024 * 1024,
+        });
+        return {
+            exitCode: result.status ?? 1,
+            stdout: result.stdout ?? '',
+            stderr: result.stderr ?? '',
+        };
+    }
     const result = spawnSync(
         'docker',
         [
-            'run', '--init', '--rm', '--user', 'root',
+            'run', '--init', '--rm', '--platform', 'linux/amd64', '--user', 'root',
             '-v', `${WORKSPACE_DIR}:/workspace`,
             '-w', CONTAINER_CWD,
             '--entrypoint', '',
@@ -97,9 +110,13 @@ const execDockerRaw = (cmd: string) => {
  * terminal (stdio: 'inherit') so build progress is visible.
  */
 const execDockerBuild = (cmd: string) => {
-    const escapedCmd = cmd.replace(/'/g, "'\\''");
+    const escapedCmd = cmd.replace(/'/g, "'\\''")
+    if (DIRECT_EXEC) {
+        execSync(`sh -c '${escapedCmd} && sync'`, { stdio: 'inherit', cwd: CONTAINER_CWD });
+        return;
+    }
     execSync(
-        `docker run --init --rm --user root -v "${WORKSPACE_DIR}":/workspace -w ${CONTAINER_CWD} --entrypoint="" ${IMAGE_NAME} sh -c '${escapedCmd} && sync'`,
+        `docker run --init --rm --platform linux/amd64 --user root -v "${WORKSPACE_DIR}":/workspace -w ${CONTAINER_CWD} --entrypoint="" ${IMAGE_NAME} sh -c '${escapedCmd} && sync'`,
         { stdio: 'inherit', cwd: WORKSPACE_DIR },
     );
 };
@@ -109,7 +126,7 @@ const execDockerBuild = (cmd: string) => {
 function runBenchmark(label: string, query: string, format = 'csv'): BenchmarkResult {
     const start = Date.now();
     const { exitCode, stdout, stderr } = execDockerRaw(
-        `/qlever/qlever-cli query ${CONTAINER_DB_BASE} "${query.replace(/"/g, '\\"')}" ${format}`,
+        `/workspace/qlever-cli query ${CONTAINER_DB_BASE} "${query.replace(/"/g, '\\"')}" ${format}`,
     );
     const elapsedMs = Date.now() - start;
 
@@ -207,7 +224,7 @@ describe('QLever CLI Performance Benchmarks – Large File', { timeout: 7_200_00
         if (fs.existsSync(metaFile)) {
             console.log('  Index files found – validating…');
             const val = execDockerRaw(
-                `/qlever/qlever-cli query ${CONTAINER_DB_BASE} "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }" csv`,
+                `/workspace/qlever-cli query ${CONTAINER_DB_BASE} "SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }" csv`,
             );
             if (val.exitCode === 0) {
                 const valLines = val.stdout.trim().split('\n');
@@ -236,7 +253,7 @@ describe('QLever CLI Performance Benchmarks – Large File', { timeout: 7_200_00
         const configJson = JSON.stringify(config).replace(/'/g, "'\\''");
         console.log('  Building index (streaming decompression – may take several minutes)…');
         try {
-            execDockerBuild(`gunzip -c '${CONTAINER_CWD}/${GZ_FILENAME}' | /qlever/qlever-cli build-index '${configJson}'`);
+            execDockerBuild(`gunzip -c '${CONTAINER_CWD}/${GZ_FILENAME}' | /workspace/qlever-cli build-index '${configJson}'`);
         } catch (err: any) {
             throw new Error(`Index build failed. See output above.\n${err.message ?? ''}`);
         }

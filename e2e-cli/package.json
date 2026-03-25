@@ -3,7 +3,8 @@
     "version": "1.0.0",
     "description": "E2E tests for QLever CLI",
     "scripts": {
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:docker": "docker compose -f ../docker-compose.cli-alpine.yml run --rm test-runner"
     },
     "devDependencies": {
         "@types/node": "^20.0.0",
