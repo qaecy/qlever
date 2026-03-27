@@ -236,11 +236,25 @@ int executeUpdate(const std::string& indexBasename,
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
 
+    // Snapshot delta counts before the update so we can compute the per-query
+    // delta below. Without this, callers would only see the readFromDisk()
+    // log line which reflects the *accumulated* state from previous sessions.
+    auto countBefore = qlever->getDeltaCounts();
+
     // Execute the update
     qlever->update(updateQuery);
 
-    json response =
-        createSuccessResponse("Update applied successfully.", updateQuery, 0);
+    auto countAfter = qlever->getDeltaCounts();
+
+    json response;
+    response["success"] = true;
+    response["message"] = "Update applied successfully.";
+    response["inserted"] = countAfter.triplesInserted_ - countBefore.triplesInserted_;
+    response["deleted"] = countAfter.triplesDeleted_ - countBefore.triplesDeleted_;
+    response["timestamp"] =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
     std::cout << response.dump() << std::endl;
     flushAndExit(0);
   } catch (const std::exception& e) {
