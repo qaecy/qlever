@@ -1,8 +1,12 @@
+#include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -32,6 +36,56 @@
 #include "util/json.h"
 
 using json = nlohmann::json;
+
+// ---------------------------------------------------------------------------
+// Advisory inter-process file lock for the CLI.
+//
+// Every CLI command that reads or writes `.update-triples` acquires a *shared*
+// lock; `binary-rebuild` (which atomically swaps the index files on disk)
+// acquires an *exclusive* lock.  This prevents the race condition where a
+// writer loads the NEW index but still sees the OLD `.update-triples` (or vice
+// versa), which results in `LocatedTriplesPerBlock::add` seeing a triple that
+// is already present in the set and firing the `wasInserted == true` assertion.
+//
+// The lock is implemented via POSIX flock(2) on a per-index lock file
+// (`<indexBasename>.qlever-cli.lock`).  Advisory locks are automatically
+// released by the OS when all file descriptors are closed, so the lock is
+// always released even when the process exits via _exit().
+// ---------------------------------------------------------------------------
+class IndexCLILock {
+ public:
+  enum class Mode { Shared, Exclusive };
+
+  explicit IndexCLILock(const std::string& indexBasename, Mode mode) {
+    std::string lockPath = indexBasename + ".qlever-cli.lock";
+    fd_ = ::open(lockPath.c_str(), O_RDWR | O_CREAT, 0666);
+    if (fd_ < 0) {
+      throw std::runtime_error("Could not open lock file '" + lockPath +
+                               "': " + std::strerror(errno));
+    }
+    int op = (mode == Mode::Exclusive) ? LOCK_EX : LOCK_SH;
+    if (::flock(fd_, op) != 0) {
+      ::close(fd_);
+      fd_ = -1;
+      throw std::runtime_error("Could not acquire lock on '" + lockPath +
+                               "': " + std::strerror(errno));
+    }
+  }
+
+  ~IndexCLILock() {
+    if (fd_ >= 0) {
+      ::flock(fd_, LOCK_UN);
+      ::close(fd_);
+    }
+  }
+
+  // Non-copyable, non-movable.
+  IndexCLILock(const IndexCLILock&) = delete;
+  IndexCLILock& operator=(const IndexCLILock&) = delete;
+
+ private:
+  int fd_ = -1;
+};
 
 // JSON utility functions
 json createErrorResponse(const std::string& error,
@@ -229,6 +283,10 @@ int executeUpdate(const std::string& indexBasename,
                   const std::string& updateQuery,
                   ad_utility::MemorySize memLimit) {
   try {
+    // Hold a shared lock so that a concurrent `binary-rebuild` cannot swap
+    // index files while we are reading or writing `.update-triples`.
+    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Shared);
+
     // Load index
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
@@ -296,6 +354,10 @@ int executeWriteOrDelete(const std::string& indexBasename,
                          ad_utility::MemorySize memLimit,
                          const std::string& defaultGraph = "") {
   try {
+    // Hold a shared lock so that a concurrent `binary-rebuild` cannot swap
+    // index files while we are reading or writing `.update-triples`.
+    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Shared);
+
     qlever::Filetype filetype;
     if (format == "ttl" || format == "turtle" || format == "nt") {
       filetype = qlever::Filetype::Turtle;
@@ -386,6 +448,11 @@ int executeBinaryRebuild(const std::string& indexBasename,
                          const std::string& outputBasename,
                          ad_utility::MemorySize memLimit) {
   try {
+    // Hold an exclusive lock for the entire rebuild.  This prevents any
+    // concurrent write/update command from loading a partially-swapped index
+    // or a stale .update-triples file during the file-swap window.
+    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Exclusive);
+
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
     config.memoryLimit_ = memLimit;

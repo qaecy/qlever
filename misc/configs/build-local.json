@@ -1,0 +1,9 @@
+{
+  "index_name": "c666562b-ae98-4079-833d-fd29500f0689",
+  "index_directory": "./databases",
+  "input_files": [
+    {"path": "/Users/mads/Downloads/c666562b-ae98-4079-833d-fd29500f0689_nquads_latest.nq", "format": "nq"}
+  ],
+  "memory_limit_gb": 2,
+  "vocabulary_type": "on-disk-compressed"
+}

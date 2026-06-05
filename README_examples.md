@@ -50,7 +50,7 @@ qlever binary-rebuild ./databases/test
 
 From gunzipped file:
 ```bash
-gunzip -c /Users/mads/Downloads/777e7ad2-3856-408b-a031-1a154f3f3414_no_star.nq.gz | \
+gunzip -c /Users/mads/Downloads/c666562b-ae98-4079-833d-fd29500f0689_nquads_latest.nq.gz | \
   docker run --rm --user root -i \
     -v "$(pwd)":/workspace \
     -w /workspace \
