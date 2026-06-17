@@ -29,6 +29,7 @@
 #include "parser/RdfParser.h"
 #include "parser/SparqlParser.h"
 #include "parser/TokenizerCtre.h"
+#include "util/HashMap.h"
 #include "util/Log.h"
 #include "util/MemorySize/MemorySize.h"
 #include "util/Timer.h"
@@ -400,6 +401,29 @@ int executeWriteOrDelete(const std::string& indexBasename,
     LocalVocab localVocab;
     const auto& vocab = qlever->getVocab();
     const auto& encodedIriMgr = qlever->encodedIriManager();
+    auto* blankNodeManager = qlever->index_.getBlankNodeManager();
+
+    // Maps blank-node label (e.g. "_:g_0_1") → stable BlankNodeIndex Id.
+    // Must survive across batches so that the same label always yields the
+    // same Id within a single file/write operation.
+    ad_utility::HashMap<std::string, Id> blankNodeMap;
+
+    // Convert a TripleComponent to an Id, handling blank nodes (stored as
+    // std::string in the TripleComponent variant) via BlankNodeManager.
+    // Calling toValueId() on a string-variant TC would fire the
+    // AD_CONTRACT_CHECK(!isString()) assertion in toValueIdOrBounds().
+    auto tcToId = [&](TripleComponent tc) -> Id {
+      if (tc.isString()) {
+        auto [it, isNew] =
+            blankNodeMap.try_emplace(tc.getString(), Id::makeUndefined());
+        if (isNew) {
+          it->second = Id::makeFromBlankNodeIndex(
+              localVocab.getBlankNodeIndex(blankNodeManager));
+        }
+        return it->second;
+      }
+      return std::move(tc).toValueId(vocab, localVocab, encodedIriMgr);
+    };
 
     size_t totalProcessed = 0;
     while (auto batchOpt = parser->getBatch()) {
@@ -410,14 +434,10 @@ int executeWriteOrDelete(const std::string& indexBasename,
       idTriples.reserve(batch.size());
 
       for (auto& turtleTriple : batch) {
-        Id sId = std::move(turtleTriple.subject_)
-                     .toValueId(vocab, localVocab, encodedIriMgr);
-        Id pId = std::move(turtleTriple.predicate_)
-                     .toValueId(vocab, localVocab, encodedIriMgr);
-        Id oId = std::move(turtleTriple.object_)
-                     .toValueId(vocab, localVocab, encodedIriMgr);
-        Id gId = std::move(turtleTriple.graphIri_)
-                     .toValueId(vocab, localVocab, encodedIriMgr);
+        Id sId = tcToId(std::move(turtleTriple.subject_));
+        Id pId = tcToId(std::move(turtleTriple.predicate_));
+        Id oId = tcToId(std::move(turtleTriple.object_));
+        Id gId = tcToId(std::move(turtleTriple.graphIri_));
 
         idTriples.push_back(IdTriple<0>{std::array{sId, pId, oId, gId}});
       }
