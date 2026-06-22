@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -25,6 +26,7 @@
 #include "engine/QueryPlanner.h"
 #include "index/InputFileSpecification.h"
 #include "index/LocalVocab.h"
+#include "index/vocabulary/PolymorphicVocabulary.h"
 #include "index/vocabulary/VocabularyType.h"
 #include "parser/RdfParser.h"
 #include "parser/SparqlParser.h"
@@ -169,6 +171,13 @@ void printUsage(const char* programName, std::ostream& out = std::cerr) {
          "a SELECT query and write result as a materialized view\n";
   out << "  load-view   <index_basename> <view_name>                Load a "
          "materialized view from disk (verifies it exists)\n";
+  out << "  clone       <source_basename> <target_basename> <source_id> "
+         "<target_id>\n";
+  out << "                 Copy index files from source to target and replace\n";
+  out << "                 every occurrence of source_id with target_id in "
+         "all vocabulary entries.\n";
+  out << "                 Delta triples (.update-triples) are not copied; "
+         "run binary-rebuild first if needed.\n";
   out << "\nJSON input format for query-json:\n";
   out << "{\n";
   out << "  \"indexBasename\": \"path/to/index\",\n";
@@ -751,6 +760,221 @@ int executeQueryToFile(const std::string& indexBasename,
   }
 }
 
+// ---------------------------------------------------------------------------
+// Clone an index: copy all index files and replace sourceId with targetId in
+// all vocabulary entries (IRIs, literals). Designed for the IRI pattern
+// https://cue.qaecy.com/r/<projectId>/<resourceId> where projectId == indexId.
+//
+// The vocabulary sort order is preserved as long as no foreign vocabulary
+// entries sort between <sourceId> and <targetId> in the prefix namespace —
+// which holds for single-project databases.
+//
+// Delta triples (.update-triples) are intentionally excluded from the clone so
+// the target starts with a clean base index. Run `binary-rebuild` on the source
+// first if you want to bake in pending deltas before cloning.
+// ---------------------------------------------------------------------------
+
+// Replace all non-overlapping occurrences of `from` with `to` inside `str`.
+// Returns the number of replacements made.
+static size_t replaceAllInString(std::string& str, const std::string& from,
+                                 const std::string& to) {
+  if (from.empty()) return 0;
+  size_t count = 0;
+  size_t pos = 0;
+  while ((pos = str.find(from, pos)) != std::string::npos) {
+    str.replace(pos, from.size(), to);
+    pos += to.size();
+    ++count;
+  }
+  return count;
+}
+
+// Rebuild the vocabulary rooted at `vocabBase + ".vocabulary"` by streaming
+// every entry through a string replacement and writing to a new set of files,
+// then atomically moving them over the old ones.
+// Returns the total number of individual string replacements performed.
+static uint64_t rebuildVocabularyWithReplacement(
+    const std::string& vocabBase, const std::string& sourceId,
+    const std::string& targetId, ad_utility::VocabularyType vocabType) {
+  namespace fs = std::filesystem;
+
+  const std::string vocabFilename = vocabBase + ".vocabulary";
+  const std::string tempFilename = vocabBase + ".vocabulary.__clone_tmp__";
+
+  // Open the (already-copied) vocabulary for reading.
+  PolymorphicVocabulary vocab;
+  vocab.open(vocabFilename, vocabType);
+
+  // Create a writer that will produce identically-typed vocabulary files under
+  // the temp prefix. Passing isExternal=true causes words to be stored only on
+  // disk; every milestoneDistance-th word is still cached in RAM for binary
+  // search, which matches the default write behaviour.
+  auto writer = vocab.makeDiskWriterPtr(tempFilename);
+
+  uint64_t totalReplacements = 0;
+  const size_t vocabSize = vocab.size();
+
+  for (uint64_t i = 0; i < vocabSize; ++i) {
+    std::string word = vocab[i];
+    totalReplacements += replaceAllInString(word, sourceId, targetId);
+    (*writer)(word, /*isExternal=*/true);
+  }
+
+  writer->finish();
+  writer.reset();
+  vocab.close();
+
+  // Collect the rename pairs first, then execute — avoids iterator
+  // invalidation on platforms where directory_iterator is lazy.
+  fs::path tempPath = fs::absolute(fs::path(tempFilename));
+  fs::path dir = tempPath.parent_path();
+  const std::string tmpPrefix = tempPath.filename().string();
+  const std::string finalPrefix =
+      fs::path(fs::absolute(vocabFilename)).filename().string();
+
+  std::vector<std::pair<fs::path, fs::path>> renames;
+  for (const auto& entry : fs::directory_iterator(dir)) {
+    if (!entry.is_regular_file()) continue;
+    const std::string fname = entry.path().filename().string();
+    if (fname.size() < tmpPrefix.size() ||
+        fname.substr(0, tmpPrefix.size()) != tmpPrefix)
+      continue;
+    const std::string suffix = fname.substr(tmpPrefix.size());
+    renames.emplace_back(entry.path(), dir / (finalPrefix + suffix));
+  }
+  for (auto& [src, dst] : renames) {
+    if (fs::exists(dst)) fs::remove(dst);
+    fs::rename(src, dst);
+  }
+
+  return totalReplacements;
+}
+
+int executeClone(const std::string& sourceBasename,
+                 const std::string& targetBasename,
+                 const std::string& sourceId, const std::string& targetId) {
+  try {
+    namespace fs = std::filesystem;
+
+    // Validate source index.
+    const std::string srcMeta = sourceBasename + ".meta-data.json";
+    if (!fs::exists(srcMeta)) {
+      throw std::runtime_error("Source index not found: " + srcMeta);
+    }
+
+    // Read vocabulary type from source meta-data (default: on-disk-compressed).
+    json metaJson;
+    {
+      std::ifstream f(srcMeta);
+      f >> metaJson;
+    }
+    ad_utility::VocabularyType vocabType{
+        ad_utility::VocabularyType::Enum::OnDiskCompressed};
+    if (metaJson.contains("vocabulary-type")) {
+      vocabType = ad_utility::VocabularyType::fromString(
+          metaJson["vocabulary-type"].get<std::string>());
+    }
+
+    // Resolve source/target directory and filename.
+    fs::path srcPath = fs::absolute(sourceBasename);
+    fs::path dstPath = fs::absolute(targetBasename);
+
+    if (srcPath == dstPath) {
+      throw std::runtime_error(
+          "Source and target basename are the same; nothing to do.");
+    }
+
+    fs::path srcDir = srcPath.parent_path();
+    fs::path dstDir = dstPath.parent_path();
+    const std::string srcFilename = srcPath.filename().string();
+    const std::string dstFilename = dstPath.filename().string();
+
+    if (!fs::exists(dstDir)) {
+      fs::create_directories(dstDir);
+    }
+
+    // Files with these suffixes are intentionally excluded from the clone.
+    static const std::vector<std::string> kSkipSuffixes = {
+        ".update-triples",
+        ".qlever-cli.lock",
+    };
+
+    // Copy every regular file whose name starts with the source basename,
+    // excluding the files above.
+    size_t filesCopied = 0;
+    for (const auto& entry : fs::directory_iterator(srcDir)) {
+      if (!entry.is_regular_file()) continue;
+      const std::string fname = entry.path().filename().string();
+      if (fname.size() < srcFilename.size() ||
+          fname.substr(0, srcFilename.size()) != srcFilename)
+        continue;
+
+      const std::string suffix = fname.substr(srcFilename.size());
+      bool skip = false;
+      for (const auto& s : kSkipSuffixes) {
+        if (suffix == s) {
+          skip = true;
+          break;
+        }
+      }
+      if (skip) continue;
+
+      fs::path dst = dstDir / (dstFilename + suffix);
+      fs::copy_file(entry.path(), dst, fs::copy_options::overwrite_existing);
+      ++filesCopied;
+    }
+
+    if (filesCopied == 0) {
+      throw std::runtime_error("No index files found for source: " +
+                               sourceBasename);
+    }
+
+    // Rebuild the main vocabulary with sourceId → targetId replacement.
+    const std::string dstBasename = dstPath.string();
+    const uint64_t replacements = rebuildVocabularyWithReplacement(
+        dstBasename, sourceId, targetId, vocabType);
+
+    // Rebuild the internal permutation vocabulary if present.
+    // (Internal IRIs are QLever system predicates and unlikely to contain the
+    // project ID, but we run the replacement to be thorough.)
+    const std::string internalVocabBase = dstBasename + ".internal";
+    if (fs::exists(internalVocabBase + ".vocabulary.words.external") ||
+        fs::exists(internalVocabBase + ".vocabulary.words.internal") ||
+        fs::exists(internalVocabBase + ".vocabulary.external") ||
+        fs::exists(internalVocabBase + ".vocabulary")) {
+      try {
+        rebuildVocabularyWithReplacement(internalVocabBase, sourceId, targetId,
+                                        vocabType);
+      } catch (const std::exception&) {
+        // Internal vocab may not exist or may have a different layout; skip.
+      }
+    }
+
+    json response;
+    response["success"] = true;
+    response["message"] = "Clone completed successfully.";
+    response["sourceBasename"] = sourceBasename;
+    response["targetBasename"] = targetBasename;
+    response["sourceId"] = sourceId;
+    response["targetId"] = targetId;
+    response["filesCopied"] = static_cast<int>(filesCopied);
+    response["vocabReplacements"] = replacements;
+    response["timestamp"] =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    std::cout << response.dump() << std::endl;
+    flushAndExit(0);
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    errorResponse["command"] = "clone";
+    errorResponse["sourceBasename"] = sourceBasename;
+    errorResponse["targetBasename"] = targetBasename;
+    std::cerr << errorResponse.dump() << std::endl;
+    flushAndExit(1);
+  }
+}
+
 int main(int argc, char* argv[]) {
   // Redirect QLever logging to stderr so only JSON goes to stdout
   ad_utility::setGlobalLoggingStream(&std::cerr);
@@ -841,6 +1065,9 @@ int main(int argc, char* argv[]) {
     } else if (command == "load-view" && nargs == 4) {
       // load-view <index_basename> <view_name>
       return executeLoadView(args[2], args[3], memLimit);
+    } else if (command == "clone" && nargs == 6) {
+      // clone <source_basename> <target_basename> <source_id> <target_id>
+      return executeClone(args[2], args[3], args[4], args[5]);
     } else {
       printUsage(argv[0]);
       return 1;

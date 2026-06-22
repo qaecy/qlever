@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { createExecHelpers } from './test-utils';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 
 const LOCAL_E2E_DIR = path.resolve(__dirname);
 const LOCAL_DB_DIR = path.join(LOCAL_E2E_DIR, 'test-db-extended');
@@ -12,7 +13,10 @@ const CONTAINER_CWD = '/workspace/e2e-cli/test-db-extended';
 describe('QLever CLI Extended Commands', { timeout: 120000 }, () => {
     beforeAll(() => {
         if (fs.existsSync(LOCAL_DB_DIR)) {
-            fs.rmSync(LOCAL_DB_DIR, { recursive: true, force: true });
+            // fs.rmSync with { recursive: true } triggers ENOTEMPTY on Alpine
+            // Linux (Node.js calls rmdir() before children are fully removed).
+            // Use the shell instead.
+            execSync(`rm -rf "${LOCAL_DB_DIR}"`);
         }
         fs.mkdirSync(LOCAL_DB_DIR, { recursive: true });
 
@@ -343,5 +347,82 @@ describe('QLever CLI Extended Commands', { timeout: 120000 }, () => {
             `/workspace/qlever-cli write-view ${CONTAINER_DB_BASE} "bad name!" "SELECT ?s WHERE { ?s ?p ?o }"`
         );
         expect(exitCode).not.toBe(0);
+    });
+
+    // ── clone ──────────────────────────────────────────────────
+
+    it('should clone an index and replace project IRIs', () => {
+        const sourceDir = `${CONTAINER_CWD}/clone-source`;
+        const localSourceDir = path.join(LOCAL_DB_DIR, 'clone-source');
+        fs.mkdirSync(localSourceDir, { recursive: true });
+
+        const sourceId = 'proj-source';
+        const targetId = 'proj-target';
+        const base = 'https://cue.qaecy.com/r';
+
+        // Build source index with IRIs that embed the project ID in subject,
+        // predicate, object, and literal positions.
+        fs.writeFileSync(
+            path.join(localSourceDir, 'data.nt'),
+            `<${base}/${sourceId}/res1> <${base}/${sourceId}/knows> <${base}/${sourceId}/res2> .\n` +
+            `<${base}/${sourceId}/res2> <${base}/${sourceId}/label> "${sourceId}" .\n` +
+            `<${base}/${sourceId}/res1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <${base}/${sourceId}/Thing> .\n`,
+        );
+        const buildConfig = JSON.stringify({
+            index_name: 'source-index',
+            index_directory: sourceDir,
+            input_files: [{ path: `${sourceDir}/data.nt`, format: 'nt' }],
+        });
+        execDocker(`/workspace/qlever-cli build-index '${buildConfig.replace(/'/g, "'\\''")}'`);
+
+        // Clone into a sibling directory.
+        const targetDir = `${CONTAINER_CWD}/clone-target`;
+        const localTargetDir = path.join(LOCAL_DB_DIR, 'clone-target');
+        fs.mkdirSync(localTargetDir, { recursive: true });
+
+        const out = execDocker(
+            `/workspace/qlever-cli clone ${sourceDir}/source-index ${targetDir}/target-index ${sourceId} ${targetId}`,
+        );
+        const result = JSON.parse(out);
+        expect(result.success).toBe(true);
+        expect(result.vocabReplacements).toBeGreaterThan(0);
+        expect(result.filesCopied).toBeGreaterThan(0);
+
+        // Serialize the cloned index — all project IRIs should carry the new ID.
+        const cloneOut = execDocker(
+            `/workspace/qlever-cli serialize ${targetDir}/target-index nt`,
+        );
+        expect(cloneOut).toContain(`${base}/${targetId}/res1`);
+        expect(cloneOut).toContain(`${base}/${targetId}/res2`);
+        expect(cloneOut).toContain(`${base}/${targetId}/knows`);
+        expect(cloneOut).toContain(`${base}/${targetId}/Thing`);
+        expect(cloneOut).not.toContain(`${base}/${sourceId}/`);
+
+        // The cloned index must be queryable by the new subject IRI.
+        const queryOut = execDocker(
+            `/workspace/qlever-cli query ${targetDir}/target-index ` +
+            `"SELECT ?p ?o WHERE { <${base}/${targetId}/res1> ?p ?o }" csv`,
+        );
+        expect(queryOut).toContain(`${base}/${targetId}/knows`);
+        expect(queryOut).toContain(`${base}/${targetId}/res2`);
+
+        // Source index must be completely unchanged.
+        const sourceOut = execDocker(
+            `/workspace/qlever-cli serialize ${sourceDir}/source-index nt`,
+        );
+        expect(sourceOut).toContain(`${base}/${sourceId}/res1`);
+        expect(sourceOut).not.toContain(`${base}/${targetId}/`);
+    });
+
+    it('should fail clone with non-existent source index', () => {
+        const { exitCode, stderr } = execDockerRaw(
+            `/workspace/qlever-cli clone ${CONTAINER_CWD}/no-such-index ${CONTAINER_CWD}/tgt src-id tgt-id`,
+        );
+        expect(exitCode).not.toBe(0);
+        const jsonMatch = stderr.match(/\{[\s\S]*\}/);
+        expect(jsonMatch).not.toBeNull();
+        const err = JSON.parse(jsonMatch![0]);
+        expect(err.success).toBe(false);
+        expect(err.command).toBe('clone');
     });
 });
