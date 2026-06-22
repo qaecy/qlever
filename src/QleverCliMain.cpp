@@ -22,9 +22,9 @@
 #include "cli-utils/RdfOutputUtils.h"
 #include "cli-utils/StreamSuppressor.h"
 #include "engine/ExecuteUpdate.h"
-#include "engine/LocalVocab.h"
 #include "engine/QueryPlanner.h"
 #include "index/InputFileSpecification.h"
+#include "index/LocalVocab.h"
 #include "index/vocabulary/VocabularyType.h"
 #include "parser/RdfParser.h"
 #include "parser/SparqlParser.h"
@@ -388,19 +388,23 @@ int executeWriteOrDelete(const std::string& indexBasename,
     }
 
     std::unique_ptr<RdfParserBase> parser;
+    // Upstream's `RdfStreamParser` now takes an already-opened `ParallelBuffer`
+    // instead of a filename + buffer size. Build a `ParallelFileBuffer` from
+    // the input file ("-" maps to stdin, see ParallelBuffer.cpp).
     if (filetype == qlever::Filetype::NQuad) {
       parser = std::make_unique<RdfStreamParser<NQuadParser<TokenizerCtre>>>(
-          actualInputFile, &qlever->encodedIriManager(),
-          DEFAULT_PARSER_BUFFER_SIZE, std::move(defaultGraphTc));
+          std::make_unique<ParallelFileBuffer>(
+              DEFAULT_PARSER_BUFFER_SIZE.getBytes(), actualInputFile),
+          &qlever->encodedIriManager(), std::move(defaultGraphTc));
     } else {
       parser = std::make_unique<RdfStreamParser<TurtleParser<TokenizerCtre>>>(
-          actualInputFile, &qlever->encodedIriManager(),
-          DEFAULT_PARSER_BUFFER_SIZE, std::move(defaultGraphTc));
+          std::make_unique<ParallelFileBuffer>(
+              DEFAULT_PARSER_BUFFER_SIZE.getBytes(), actualInputFile),
+          &qlever->encodedIriManager(), std::move(defaultGraphTc));
     }
 
     LocalVocab localVocab;
-    const auto& vocab = qlever->getVocab();
-    const auto& encodedIriMgr = qlever->encodedIriManager();
+    const auto& indexImpl = qlever->index_.getImpl();
     auto* blankNodeManager = qlever->index_.getBlankNodeManager();
 
     // Maps blank-node label (e.g. "_:g_0_1") → stable BlankNodeIndex Id.
@@ -422,7 +426,7 @@ int executeWriteOrDelete(const std::string& indexBasename,
         }
         return it->second;
       }
-      return std::move(tc).toValueId(vocab, localVocab, encodedIriMgr);
+      return std::move(tc).toValueId(indexImpl, localVocab);
     };
 
     size_t totalProcessed = 0;

@@ -117,12 +117,12 @@ std::string IndexBuilder::processInputFiles(
     spec.parseInParallelSetExplicitly_ = true;
 
     if (inputFile.is_string()) {
-      spec.filename_ = inputFile.get<std::string>();
+      spec.source_ = inputFile.get<std::string>();
     } else if (inputFile.is_object()) {
       if (!inputFile.contains("path") || !inputFile["path"].is_string()) {
         return "Input file object must contain 'path' string";
       }
-      spec.filename_ = inputFile["path"].get<std::string>();
+      spec.source_ = inputFile["path"].get<std::string>();
 
       // Optional format specification
       if (inputFile.contains("format") && inputFile["format"].is_string()) {
@@ -148,9 +148,9 @@ std::string IndexBuilder::processInputFiles(
 
     // Allow '-' or '/dev/stdin' for stdin, skip file existence check in that
     // case
-    if (spec.filename_ != "-" && spec.filename_ != "/dev/stdin") {
-      if (!std::filesystem::exists(spec.filename_)) {
-        return "Input file does not exist: " + spec.filename_;
+    if (spec.filename() != "-" && spec.filename() != "/dev/stdin") {
+      if (!std::filesystem::exists(spec.filename())) {
+        return "Input file does not exist: " + spec.filename();
       }
     }
 

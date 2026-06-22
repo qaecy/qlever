@@ -12,10 +12,10 @@
 #ifndef QLEVER_SRC_ENGINE_SORT_H
 #define QLEVER_SRC_ENGINE_SORT_H
 
-#include "engine/LocalVocab.h"
 #include "engine/Operation.h"
 #include "engine/QueryExecutionTree.h"
 #include "engine/Result.h"
+#include "index/LocalVocab.h"
 
 // This operation sorts an `IdTable` by the `internal` order of the IDs. This
 // order is cheap to compute (just a bitwise compare of integers), but is
@@ -46,6 +46,8 @@ class Sort : public Operation {
     return subtree_->getSizeEstimate();
   }
 
+  void onLimitOffsetChanged(const LimitOffsetClause&) override;
+
  public:
   virtual float getMultiplicity(size_t col) override {
     return subtree_->getMultiplicity(col);
@@ -67,6 +69,12 @@ class Sort : public Operation {
     return subtree_->knownEmptyResult();
   }
 
+  // For a `Sort` with `LIMIT N`, any N rows are fine as long as they are
+  // sorted: there is no user-defined order that the `LIMIT` is taken against
+  // (user-facing `ORDER BY` goes through `OrderBy`, not `Sort`). So we can
+  // let the subtree compute only N rows and sort those.
+  bool supportsLimitOffset() const override { return true; }
+
   [[nodiscard]] size_t getResultWidth() const override;
 
   std::vector<QueryExecutionTree*> getChildren() override {
@@ -85,7 +93,7 @@ class Sort : public Operation {
 
   virtual Result computeResult(bool requestLaziness) override;
 
-  // Sort in memory, using `Engine::sort`.
+  // Sort in memory, using `IdTableUtils::sort`.
   Result computeResultInMemory(IdTable idTable, LocalVocab localVocab) const;
 
   // Sort externally, using `CompressedExternalIdTableSorter`, using the value

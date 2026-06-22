@@ -795,6 +795,12 @@ class CompressedRelationReader {
       const LocatedTriplesPerBlock& locatedTriplesPerBlock,
       const LimitOffsetClause& limitOffset = {}) const;
 
+  // Retrieve all triples in the given block, ignoring updates. This is used in
+  // `DeltaTriples::vacuum` to determine update triples that have no effect and
+  // thus can be dropped.
+  IdTable readBlockWithoutLocatedTriples(CompressedBlockMetadata block,
+                                         ColumnIndices additionalColumns) const;
+
   // Get the exact size of the result of the scan, taking the given located
   // triples into account. This requires locating the triples exactly in each
   // of the relevant blocks.
@@ -818,18 +824,10 @@ class CompressedRelationReader {
       const LocatedTriplesPerBlock& locatedTriplesPerBlock) const;
 
  public:
-  // For a given relation, determine the `col1Id`s and their counts. This is
-  // used for `computeGroupByObjectWithCount`.
-  IdTable getDistinctCol1IdsAndCounts(
-      const ScanSpecAndBlocks& scanSpecAndBlocks,
-      const CancellationHandle& cancellationHandle,
-      const LocatedTriplesPerBlock& locatedTriplesPerBlock,
-      const LimitOffsetClause& limitOffset) const;
-
-  // For all `col0Ids` determine their counts. This is
-  // used for `computeGroupByForFullScan`.
-  IdTable getDistinctCol0IdsAndCounts(
-      const ScanSpecAndBlocks& scanSpecAndBlocks,
+  // Determine the distinct values and their counts for the column at
+  // `columnIndex` (must be 0 or 1). Used for GROUP BY optimizations.
+  IdTable getDistinctColIdsAndCounts(
+      ColumnIndex columnIndex, const ScanSpecAndBlocks& scanSpecAndBlocks,
       const CancellationHandle& cancellationHandle,
       const LocatedTriplesPerBlock& locatedTriplesPerBlock,
       const LimitOffsetClause& limitOffset) const;
@@ -871,6 +869,15 @@ class CompressedRelationReader {
 
   // Get access to the underlying allocator
   const Allocator& allocator() const { return allocator_; }
+
+  // Allow to construct a `CompressedRelationReader` using a different
+  // allocator.
+  CompressedRelationReader makeReaderWithReboundAllocator(
+      Allocator allocator) const {
+    return CompressedRelationReader{std::move(allocator),
+                                    ad_utility::File{file_.name(), "r"},
+                                    useGraphPostProcessing_};
+  }
 
  private:
   // Read the block that is identified by the `blockMetaData` from the `file`.
@@ -955,17 +962,6 @@ class CompressedRelationReader {
   static ScanImplConfig getScanConfig(
       const ScanSpecification& scanSpec, ColumnIndicesRef additionalColumns,
       const LocatedTriplesPerBlock& locatedTriples);
-
-  // The common implementation for `getDistinctCol0IdsAndCounts` and
-  // `getCol1IdsAndCounts`.
-  CPP_template(typename IdGetter)(
-      requires ad_utility::InvocableWithConvertibleReturnType<
-          IdGetter, Id, const CompressedBlockMetadata::PermutedTriple&>) IdTable
-      getDistinctColIdsAndCountsImpl(
-          IdGetter idGetter, const ScanSpecAndBlocks& scanSpecAndBlocks,
-          const CancellationHandle& cancellationHandle,
-          const LocatedTriplesPerBlock& locatedTriplesPerBlock,
-          const LimitOffsetClause& limitOffset) const;
 };
 
 // TODO<joka921>

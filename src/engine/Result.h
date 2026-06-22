@@ -12,10 +12,10 @@
 #include <vector>
 
 #include "backports/span.h"
-#include "engine/LocalVocab.h"
 #include "engine/VariableToColumnMap.h"
 #include "engine/idTable/IdTable.h"
 #include "global/Id.h"
+#include "index/LocalVocab.h"
 #include "parser/data/LimitOffsetClause.h"
 #include "util/InputRangeUtils.h"
 
@@ -36,6 +36,12 @@ class Result {
     // See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=103909 for details.
     IdTableVocabPair(IdTable idTable, LocalVocab localVocab)
         : idTable_{std::move(idTable)}, localVocab_{std::move(localVocab)} {}
+
+    // Helper constructor for `IdTables` with a static amount of columns.
+    template <int COLS>
+    IdTableVocabPair(IdTableStatic<COLS> idTable, LocalVocab localVocab)
+        : IdTableVocabPair{std::move(idTable).toDynamic(),
+                           std::move(localVocab)} {}
   };
 
   // Helper enum to indicate the state of a generator after consumption.

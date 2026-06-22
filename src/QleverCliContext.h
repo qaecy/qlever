@@ -10,7 +10,6 @@
 
 #include "engine/ExecuteUpdate.h"
 #include "engine/ExportQueryExecutionTrees.h"
-#include "engine/LocalVocab.h"
 #include "engine/MaterializedViews.h"
 #include "engine/NamedResultCache.h"
 #include "engine/QueryExecutionContext.h"
@@ -23,6 +22,7 @@
 #include "index/DeltaTriples.h"
 #include "index/Index.h"
 #include "index/IndexImpl.h"
+#include "index/LocalVocab.h"
 #include "index/IndexRebuilder.h"
 #include "index/TextIndexBuilder.h"
 #include "libqlever/Qlever.h"
@@ -94,9 +94,15 @@ class QleverCliContext {
   };
 
   QueryPlan parseAndPlanQuery(std::string query) const {
+    // Upstream's `QueryExecutionContext` now takes the index and the
+    // materialized-views manager as `shared_ptr`s (so it can keep them alive).
+    // This context owns both by value and outlives every QEC it creates, so we
+    // hand out non-owning aliasing `shared_ptr`s (empty owner => no deleter).
     auto qecPtr = std::make_shared<QueryExecutionContext>(
-        index_, &cache_, allocator_, sortPerformanceEstimator_,
-        &namedResultCache_, &materializedViewsManager_);
+        std::shared_ptr<const Index>(std::shared_ptr<void>{}, &index_),
+        &cache_, allocator_, sortPerformanceEstimator_, &namedResultCache_,
+        std::shared_ptr<MaterializedViewsManager>(
+            std::shared_ptr<void>{}, &materializedViewsManager_));
     auto parsedQuery = SparqlParser::parseQuery(
         &index_.getImpl().encodedIriManager(), std::move(query), {});
     auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
@@ -258,9 +264,12 @@ class QleverCliContext {
   }
 
   std::shared_ptr<QueryExecutionContext> createQec() const {
+    // Non-owning aliasing `shared_ptr`s; see `parseAndPlanQuery` for details.
     return std::make_shared<QueryExecutionContext>(
-        index_, &cache_, allocator_, sortPerformanceEstimator_,
-        &namedResultCache_, &materializedViewsManager_);
+        std::shared_ptr<const Index>(std::shared_ptr<void>{}, &index_),
+        &cache_, allocator_, sortPerformanceEstimator_, &namedResultCache_,
+        std::shared_ptr<MaterializedViewsManager>(
+            std::shared_ptr<void>{}, &materializedViewsManager_));
   }
 
   static void buildIndex(IndexBuilderConfig config) {
