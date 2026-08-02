@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -44,12 +45,23 @@ using json = nlohmann::json;
 // ---------------------------------------------------------------------------
 // Advisory inter-process file lock for the CLI.
 //
-// Every CLI command that reads or writes `.update-triples` acquires a *shared*
-// lock; `binary-rebuild` (which atomically swaps the index files on disk)
-// acquires an *exclusive* lock.  This prevents the race condition where a
-// writer loads the NEW index but still sees the OLD `.update-triples` (or vice
-// versa), which results in `LocatedTriplesPerBlock::add` seeing a triple that
-// is already present in the set and firing the `wasInserted == true` assertion.
+// Every CLI command that *modifies* `.update-triples` (`write`, `delete`,
+// `update`) and `binary-rebuild` (which atomically swaps the index files on
+// disk) acquires an *exclusive* lock; read-only commands may use a *shared*
+// lock.  This prevents the race condition where a writer loads the NEW index
+// but still sees the OLD `.update-triples` (or vice versa), which results in
+// `LocatedTriplesPerBlock::add` seeing a triple that is already present in the
+// set and firing the `wasInserted == true` assertion.
+//
+// IMPORTANT: the mutating commands must NOT use `Mode::Shared`.  `flock(2)`
+// lets any number of holders share a `LOCK_SH`, so shared-locking the writers
+// leaves them fully concurrent with each other.  Every mutation is a
+// read-modify-write of the whole delta: `DeltaTriples::writeToDisk()`
+// serializes the entire inserted+deleted set to the *fixed* temporary path
+// `<basename>.update-triples.tmp` and then renames it over the real file.  Two
+// concurrent writers therefore (a) interleave their bytes in that one shared
+// temp file, producing a structurally corrupt `.update-triples`, and (b) lose
+// each other's triples, since each writes back the state it read at startup.
 //
 // The lock is implemented via POSIX flock(2) on a per-index lock file
 // (`<indexBasename>.qlever-cli.lock`).  Advisory locks are automatically
@@ -61,19 +73,49 @@ class IndexCLILock {
   enum class Mode { Shared, Exclusive };
 
   explicit IndexCLILock(const std::string& indexBasename, Mode mode) {
-    std::string lockPath = indexBasename + ".qlever-cli.lock";
-    fd_ = ::open(lockPath.c_str(), O_RDWR | O_CREAT, 0666);
-    if (fd_ < 0) {
-      throw std::runtime_error("Could not open lock file '" + lockPath +
-                               "': " + std::strerror(errno));
+    const std::string lockPath = indexBasename + ".qlever-cli.lock";
+    const int op = (mode == Mode::Exclusive) ? LOCK_EX : LOCK_SH;
+
+    // The lock file is created lazily by whichever process gets there first.
+    // On filesystems where `open(O_CREAT)` is not atomic across processes
+    // (observed on Docker Desktop's VirtioFS bind mounts, and expected on
+    // FUSE/network mounts such as gcsfuse or NFS), two processes racing to
+    // create it can end up with descriptors to *different* inodes — only one
+    // of which is reachable at `lockPath`. `flock` then locks two unrelated
+    // inodes and neither process excludes the other, silently defeating the
+    // lock exactly when contention is highest.
+    //
+    // Guard against that: after taking the lock, check that our descriptor
+    // still refers to the file currently at `lockPath`. If it does not, some
+    // other process's file won the path, so drop ours and retry against the
+    // winner. This is the standard robust-file-locking idiom and also handles
+    // the lock file being replaced or removed underneath us.
+    for (int attempt = 0; attempt < 100; ++attempt) {
+      int fd = ::open(lockPath.c_str(), O_RDWR | O_CREAT, 0666);
+      if (fd < 0) {
+        throw std::runtime_error("Could not open lock file '" + lockPath +
+                                 "': " + std::strerror(errno));
+      }
+      if (::flock(fd, op) != 0) {
+        int savedErrno = errno;
+        ::close(fd);
+        throw std::runtime_error("Could not acquire lock on '" + lockPath +
+                                 "': " + std::strerror(savedErrno));
+      }
+      struct stat viaFd{};
+      struct stat viaPath{};
+      if (::fstat(fd, &viaFd) == 0 && ::stat(lockPath.c_str(), &viaPath) == 0 &&
+          viaFd.st_ino == viaPath.st_ino && viaFd.st_dev == viaPath.st_dev) {
+        fd_ = fd;
+        return;
+      }
+      // We locked a file that is no longer the one at `lockPath`.
+      ::flock(fd, LOCK_UN);
+      ::close(fd);
     }
-    int op = (mode == Mode::Exclusive) ? LOCK_EX : LOCK_SH;
-    if (::flock(fd_, op) != 0) {
-      ::close(fd_);
-      fd_ = -1;
-      throw std::runtime_error("Could not acquire lock on '" + lockPath +
-                               "': " + std::strerror(errno));
-    }
+    throw std::runtime_error(
+        "Could not acquire a stable lock on '" + lockPath +
+        "': the lock file kept being replaced by another process");
   }
 
   ~IndexCLILock() {
@@ -294,9 +336,10 @@ int executeUpdate(const std::string& indexBasename,
                   const std::string& updateQuery,
                   ad_utility::MemorySize memLimit) {
   try {
-    // Hold a shared lock so that a concurrent `binary-rebuild` cannot swap
-    // index files while we are reading or writing `.update-triples`.
-    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Shared);
+    // Hold an exclusive lock: this is a read-modify-write of the whole delta,
+    // so it must exclude both a concurrent `binary-rebuild` and any other
+    // mutating command. See the note on `IndexCLILock` above.
+    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Exclusive);
 
     // Load index
     qlever::EngineConfig config;
@@ -365,9 +408,10 @@ int executeWriteOrDelete(const std::string& indexBasename,
                          ad_utility::MemorySize memLimit,
                          const std::string& defaultGraph = "") {
   try {
-    // Hold a shared lock so that a concurrent `binary-rebuild` cannot swap
-    // index files while we are reading or writing `.update-triples`.
-    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Shared);
+    // Hold an exclusive lock: this is a read-modify-write of the whole delta,
+    // so it must exclude both a concurrent `binary-rebuild` and any other
+    // mutating command. See the note on `IndexCLILock` above.
+    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Exclusive);
 
     qlever::Filetype filetype;
     if (format == "ttl" || format == "turtle" || format == "nt") {
@@ -682,6 +726,24 @@ int buildIndex(const std::string& jsonInput) {
   try {
     json input = json::parse(jsonInput);
     json response = cli_utils::IndexBuilder::buildIndex(input);
+
+    // Create the CLI lock file up front, while there is provably no
+    // contention. `IndexCLILock` would otherwise create it lazily in whichever
+    // mutating command happens to run first, and on filesystems where
+    // `open(O_CREAT)` is not atomic across processes (Docker Desktop's
+    // VirtioFS bind mounts; expected on gcsfuse/NFS-style mounts) two
+    // processes racing that first creation can end up locking different files
+    // and failing to exclude each other. Creating it here means the very first
+    // concurrent batch of writes already finds a single, stable lock file.
+    if (response.value("success", false) && response.contains("fullIndexPath")) {
+      const std::string lockPath =
+          response["fullIndexPath"].get<std::string>() + ".qlever-cli.lock";
+      int fd = ::open(lockPath.c_str(), O_RDWR | O_CREAT, 0666);
+      if (fd >= 0) {
+        ::close(fd);
+      }
+      // A failure here is not fatal: the lock file is still created lazily.
+    }
 
     std::cout << response.dump() << std::endl;
     flushAndExit(response["success"].get<bool>() ? 0 : 1);
