@@ -1,9 +1,11 @@
 services:
   # Incremental build service: mounts source + build dir as volumes.
   # Requires the qlever-builder:alpine image (build it once with:
-  #   docker build --target builder -t qlever-builder:alpine \
+  #   docker build --target deps -t qlever-builder:alpine \
   #     -f Dockerfiles/Dockerfile.cli-only.alpine .
   # ).
+  # NOTE: use `--target deps`, not `--target builder` — the latter compiles the
+  # entire source inside the image, which defeats the point of this service.
   builder:
     image: qlever-builder:alpine
     volumes:
@@ -13,17 +15,30 @@ services:
     user: root
     environment:
       - BUILD_JOBS=${BUILD_JOBS:-0}
-    command: >
-      /bin/sh -c "
-        if [ \"$$BUILD_JOBS\" = '0' ]; then JOBS=$$(nproc); else JOBS=$$BUILD_JOBS; fi
-        && cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO
-              -DCMAKE_CXX_FLAGS='-Wno-psabi -Wno-non-template-friend' ..
-        && ninja -j$$JOBS qlever-cli qlever-index
-      "
+    # NOTE: this must be a literal block (`|`), not a folded one (`>`). In a
+    # folded scalar YAML keeps newlines on lines indented deeper than the first
+    # content line, so continuation lines beginning with `&&` stayed on their
+    # own line and `sh` failed with `syntax error: unexpected "&&"`.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ "$$BUILD_JOBS" = "0" ]; then JOBS=$$(nproc); else JOBS=$$BUILD_JOBS; fi
+        cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO \
+          -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" ..
+        ninja -j$$JOBS qlever-cli qlever-index CliUtilsTest CliUtilsRdfTest
 
   # Packages the locally-built binaries into a slim Alpine runtime image
   # tagged as qlever-cli:alpine-test (used by the e2e test suite).
   # Run after 'builder' has produced ./build-alpine/qlever-cli.
+  #
+  # BROKEN: Dockerfiles/Dockerfile.cli-test-image does `COPY build-alpine/...`,
+  # but .dockerignore is an allowlist (`*` plus `!src`, `!test`, …) that does
+  # not include build-alpine/, so those files are not in the build context.
+  # Prefer the `e2e-native` service below, which bind-mounts the binary instead
+  # of copying it; to run the e2e suite for real linux/amd64 parity, build the
+  # full image via the release flow in README.md.
   image-builder:
     build:
       context: .
@@ -53,3 +68,33 @@ services:
       - .:/workspace
     environment:
       - QLEVER_DIRECT_EXEC=1
+
+  # Runs the same vitest e2e suite on the HOST architecture against the binary
+  # produced by the `builder` service above (./build-alpine/qlever-cli). No
+  # emulation, so the suite finishes in seconds rather than hours on Apple
+  # Silicon — this is the fast inner loop; `test-runner` above is the
+  # release-parity amd64 run.
+  #
+  # The binary is bind-mounted over /workspace/qlever-cli (which the spec files
+  # reference by absolute path) instead of overwriting the repo-root file, so
+  # the checked-in amd64 binary is left alone. node_modules is shadowed by an
+  # anonymous volume so that an `npm install` here cannot clobber the
+  # architecture-specific tree an amd64 run installed (esbuild ships native
+  # binaries).
+  #
+  # Prerequisites: ./build-alpine/qlever-cli must exist (run `builder` first).
+  #   docker compose -f docker-compose.cli-alpine.yml run --rm e2e-native
+  e2e-native:
+    build:
+      context: .
+      dockerfile: Dockerfiles/Dockerfile.e2e-runner
+    image: qlever-cli:e2e-runner
+    user: root
+    working_dir: /workspace/e2e-cli
+    volumes:
+      - .:/workspace
+      - ./build-alpine/qlever-cli:/workspace/qlever-cli:ro
+      - /workspace/e2e-cli/node_modules
+    environment:
+      - QLEVER_DIRECT_EXEC=1
+    command: ["sh", "-c", "npm install --no-audit --no-fund && npx vitest run"]

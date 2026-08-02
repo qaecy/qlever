@@ -1,0 +1,38 @@
+# Test-runner image for the e2e suite that runs on the HOST architecture.
+#
+# Unlike Dockerfile.cli-test-runner (which is `FROM qlever-cli:alpine-test` and
+# therefore pinned to whatever architecture that image was built for), this
+# image contains no qlever-cli binary at all: it ships only the runtime shared
+# libraries plus Node.js, and the binary under test is supplied at run time via
+# a bind mount. That keeps the e2e suite runnable natively — no emulation — so
+# it finishes in seconds instead of hours on Apple Silicon.
+#
+# Build:
+#   docker build -t qlever-cli:e2e-runner -f Dockerfiles/Dockerfile.e2e-runner .
+#
+# Run: see "Fast local build and test" in README.md.
+#
+# NOTE: the library list must stay in sync with the runtime stage of
+# Dockerfiles/Dockerfile.cli-only.alpine.
+FROM alpine:3.22
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV LC_CTYPE=C.UTF-8
+
+RUN apk add --no-cache \
+    libstdc++ \
+    libgcc \
+    icu-libs \
+    openssl \
+    zstd-libs \
+    zlib \
+    jemalloc \
+    boost-program_options \
+    boost-iostreams \
+    boost-system \
+    boost-url \
+    nodejs \
+    npm
+
+ENTRYPOINT []

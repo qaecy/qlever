@@ -16,7 +16,22 @@ describe('QLever CLI Extended Commands', { timeout: 120000 }, () => {
             // fs.rmSync with { recursive: true } triggers ENOTEMPTY on Alpine
             // Linux (Node.js calls rmdir() before children are fully removed).
             // Use the shell instead.
-            execSync(`rm -rf "${LOCAL_DB_DIR}"`);
+            //
+            // Retry a few times: when the repo is bind-mounted from macOS, the
+            // host can drop a fresh .DS_Store into this directory in between
+            // `rm` unlinking the children and calling rmdir(), which makes the
+            // removal fail with ENOTEMPTY even though `rm` just emptied it.
+            let lastErr: unknown;
+            for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                    execSync(`rm -rf "${LOCAL_DB_DIR}"`);
+                    lastErr = undefined;
+                    break;
+                } catch (err) {
+                    lastErr = err;
+                }
+            }
+            if (lastErr !== undefined) throw lastErr;
         }
         fs.mkdirSync(LOCAL_DB_DIR, { recursive: true });
 

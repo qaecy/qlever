@@ -2,26 +2,62 @@
 
 This is a QAECY version of the Qlever quad store. It extends the existing work with a CLI tool that allows querying a dataset as an embedded database.
 
-## Build, test and extract binary
+## Build and test
 
-If following passes, these are verified:
+Whichever flow you use, passing means these are verified:
 
-1. **Compilation** — `qlever-cli`, `qlever-index`, and all test binaries compile and link successfully.
-2. **Unit tests** — `CliUtilsTest` and `CliUtilsRdfTest` pass (stream suppression, query type detection, RDF output utils, index builder utils). The Docker image is only produced if these pass.
-3. **E2E integration tests** — the actual CLI binary is exercised end-to-end in Docker containers, covering:
-   - `build-index` — create an index from RDF data (triples and quads)
+1. **Compilation** — `qlever-cli`, `qlever-index`, and the test binaries compile and link successfully.
+2. **Unit tests** — `CliUtilsTest` and `CliUtilsRdfTest` pass (stream suppression, query type detection, RDF output utils, index builder utils).
+3. **E2E integration tests** — the actual CLI binary is exercised end-to-end in Docker, covering:
+   - `build-index` — create an index from RDF data (triples and quads), including from **stdin** (`"path": "-"`)
    - `query` — SELECT queries with CSV output to verify data
-   - `write` — insert triples/quads from stdin
-   - `write --graph` — insert triples into a named graph
-   - `delete` — delete triples/quads from stdin
+   - `write` / `write --graph` — insert triples/quads, optionally into a named graph
+   - `delete` — delete triples/quads
    - `binary-rebuild` — merge delta triples into a new index, then query the rebuilt index
    - `update` — SPARQL UPDATE (INSERT DATA / DELETE DATA)
-   - Correctness checks after every mutation (query to confirm inserts, deletes, and rebuilds)
-4. **Binary extraction** — a working `qlever-cli` binary is copied to the current directory.
+   - `write-view` / `load-view` — materialized views; `clone`; `serialize`; `stats`
+   - RDF* input is rejected with a clear error
+   - Correctness checks after every mutation
 
-If the command completes successfully, all CLI commands work and you have a ready-to-use binary.
+There are two flows. Use the **fast local flow** while developing; use the **release flow** when you need the deployable `linux/amd64` image and binary.
 
-### Alpine
+### Fast local flow (development)
+
+Builds natively for your host architecture (no emulation) into `./build-alpine`, and is fully incremental — after the first build, a rebuild plus the whole test suite takes well under a minute. On Apple Silicon this is the difference between minutes and hours.
+
+```bash
+# 1. Toolchain image — compiler + dependencies only, no source built here (~30 s, once).
+docker build --target deps -t qlever-builder:alpine -f Dockerfiles/Dockerfile.cli-only.alpine .
+
+# 2. Compile into ./build-alpine (first run ~1 h; subsequent runs are incremental).
+#    Builds qlever-cli, qlever-index, CliUtilsTest and CliUtilsRdfTest.
+docker compose -f docker-compose.cli-alpine.yml run --rm builder
+
+# 3. Unit tests.
+docker compose -f docker-compose.cli-alpine.yml run --rm builder ./test/CliUtilsTest
+docker compose -f docker-compose.cli-alpine.yml run --rm builder ./test/CliUtilsRdfTest
+
+# 4. E2E suite against ./build-alpine/qlever-cli (~20 s, 81 tests).
+docker compose -f docker-compose.cli-alpine.yml run --rm e2e-native
+
+# 2., 3. and 4.
+docker compose -f docker-compose.cli-alpine.yml run --rm builder && \
+docker compose -f docker-compose.cli-alpine.yml run --rm builder ./test/CliUtilsTest && \
+docker compose -f docker-compose.cli-alpine.yml run --rm builder ./test/CliUtilsRdfTest && \
+docker compose -f docker-compose.cli-alpine.yml run --rm e2e-native
+```
+
+Limit parallelism with `BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine.yml run --rm builder`.
+
+The `e2e-native` service bind-mounts `./build-alpine/qlever-cli` over `/workspace/qlever-cli` (the path the spec files use) rather than overwriting the checked-in binary at the repo root, so this flow never touches it. `node_modules` is shadowed by an anonymous volume so an `npm install` here cannot clobber the architecture-specific tree a release run installed.
+
+**This flow does not refresh the `qlever-cli` binary at the repo root** — that is a `linux/amd64` build and is produced by the release flow below.
+
+### Release flow (linux/amd64 image + deployable binary)
+
+Compiles the whole source inside the image and only produces the image if the unit tests pass. On Apple Silicon this runs under emulation and takes a couple of hours.
+
+#### Alpine
 ```bash
 # 1. Build + unit tests + produce runtime image
 docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine-test .
@@ -40,7 +76,7 @@ docker compose -f docker-compose.cli-alpine.yml build test-runner && \
 docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
 ```
 
-### Ubuntu
+#### Ubuntu
 ```bash
 # 1. Build + unit tests + produce runtime image
 docker build --platform linux/amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu-test .
@@ -63,8 +99,20 @@ docker compose -f docker-compose.cli-alpine.yml run --rm test-runner
 
 ## Use
 
-After extracting the binary (step 3 above), run `./qlever-cli --help` to see all available commands.
+After extracting the binary (step 2 of the release flow above), run `./qlever-cli --help` to see all available commands.
 For annotated usage examples see [README_examples.md](README_examples.md).
+
+When developing with the fast local flow, the equivalent binary is `./build-alpine/qlever-cli`.
+
+## Troubleshooting the test flows
+
+**`rm: can't remove '.../test-db-extended': Directory not empty`** — macOS writes a `.DS_Store` into the bind-mounted test directory in between `rm` unlinking the children and calling `rmdir()`. The `beforeAll` in `e2e-cli/extended-commands.spec.ts` retries the removal to absorb this; if it still bites, close the folder in Finder or run `find e2e-cli -name .DS_Store -delete` first.
+
+**`sh: syntax error: unexpected "&&"` from the `builder` service** — the compose `command` must be a literal block (`|`), not a folded one (`>`). In a folded scalar YAML keeps the newlines on lines indented deeper than the first content line, so continuation lines starting with `&&` stay on their own line.
+
+**`COPY build-alpine/qlever-cli` fails in `Dockerfile.cli-test-image`** — `.dockerignore` is an allowlist (`*` plus `!src`, `!test`, …) and does not include `build-alpine/`, so that directory is not in the build context. The `e2e-native` service avoids this by bind-mounting the binary instead of copying it.
+
+**`write -` / `delete -` and stdin** — with `QLEVER_DIRECT_EXEC=1` the harness rewrites a trailing ` -` into a temp file, because an anonymous pipe cannot be reopened via `/proc/self/fd/0` on Alpine. Those two commands therefore do **not** exercise the stdin path in e2e; `build-index` does, since its `-` sits inside the JSON config. Test `write -` against real stdin manually when touching the parser's file source.
 
 ## Merge main repo
 
@@ -99,7 +147,7 @@ following rules:
 
    .gitignore — append after the upstream content:
    - build-alpine/
-   - e2e-cli/test-db-extended/
+   - e2e-cli/test-db-extended/ and e2e-cli/test-db-stdin/
    - /*.nt /*.nq /*.ttl /*.trig /*.nq.gz
    - .DS_Store / *.DS_Store
    - .claude / .claude/settings.json
@@ -111,9 +159,10 @@ following rules:
           raise("Found RDF* syntax ('<<')...");
         }
    b) In RdfStreamParser<T>::getLineImpl(), inside the
-      `if (byteVec_.size() > BZIP2_MAX_TOTAL_BUFFER_SIZE)` block, before the
-      generic AD_LOG_ERROR, add:
-        if (d.size() > 1 && d[0] == '<' && d[1] == '<') {
+      `if (byteVec_.size() > RDF_PARSER_MAX_TOTAL_BUFFER_SIZE().getBytes())`
+      block, before the generic AD_LOG_ERROR, add:
+        std::string_view unparsed = tok_.view();
+        if (unparsed.size() > 1 && unparsed[0] == '<' && unparsed[1] == '<') {
           throw std::runtime_error("Found RDF* syntax ('<<')...");
         }
    The error messages must contain the string "RDF*" (the e2e test checks this).
@@ -133,8 +182,8 @@ following rules:
    must be swapped). Without this the index builder cannot read from stdin
    (producing "No such device or address" on /dev/stdin inside Docker).
 
-   src/parser/ParallelBuffer.cpp — the `open()` method must handle "-" as stdin.
-   Replace `file_.open(filename, "r");` with:
+   src/parser/AsyncBlockSource.cpp — the `FileBlockSource` constructor must
+   handle "-" as stdin. Replace `file_.open(filename, "r");` with:
      if (filename == "-") {
        file_.openFromFilePointer(stdin);
      } else {
@@ -142,21 +191,47 @@ following rules:
      }
    This allows `build-index` to accept `-` as the input file path and read data
    piped to stdin instead of failing with "No such device or address".
+   NOTE: this patch has moved before. Upstream replaced `ParallelBuffer` with
+   `AsyncBlockSource` (boost::asio) in #3023; before that merge the branch lived
+   in `ParallelFileBuffer` in `src/parser/ParallelBuffer.cpp`. If that file is
+   gone, the "-" branch belongs wherever the parser's leaf file source now opens
+   its file — do not resurrect the deleted file.
 
    src/QleverCliMain.cpp — in `executeWriteOrDelete`, do NOT convert "-" to
    "/dev/stdin". The line must be:
-     std::string actualInputFile = inputFile;  // "-" is handled by ParallelBuffer
+     std::string actualInputFile = inputFile;  // "-" handled by FileBlockSource
    (NOT: `(inputFile == "-") ? "/dev/stdin" : inputFile`)
    Without this, `write -` and `delete -` fail on Alpine Docker where
    /dev/stdin is not fopen()-able as a regular file.
+
+3. Upstream also drifts its engine APIs between merges. These broke previously
+   and are likely to move again — fix them at the call site rather than
+   reverting upstream:
+
+   - `RdfStreamParser` takes a `qlever::InputFileSpecification` plus an
+     `ad_utility::MemorySize` blocksize (it creates its own I/O thread and block
+     source). It used to take an already-opened buffer.
+   - `TripleComponent::toValueId(...)` is now a free function in
+     `index/TripleComponentConversions.h`: `toValueId(std::move(tc), indexImpl,
+     localVocab)`.
+   - `qlever::QueryPlan` (a tuple) was unified into the `qlever::PlannedQuery`
+     class in `libqlever/QleverTypes.h`; `MaterializedViewsManager::
+     writeViewToDisk` takes the latter.
+
+   After resolving, verify with the fast local flow in "Build and test" above —
+   it compiles and runs all 81 e2e tests in well under a minute once warm.
 ```
 
-## Build
+## Other image variants
+
+See "Build and test" above for the two flows you normally want. These build a
+CLI image for the host architecture, without running the tests:
 
 Alpine image: `docker build -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .`
-Alpine image staged: `docker compose -f docker-compose.cli-alpine.yml up`
 Ubuntu image: `docker build -f Dockerfiles/Dockerfile.cli-only.ubuntu -t qlever-cli:ubuntu .`
-Debian image: `docker build -f Dockerfiles/Dockerfile.cli-only.debian -t qlever-cli:debian .`
+
+For an incremental build into `./build-alpine` instead of a self-contained
+image, use the `builder` service (see the fast local flow above).
 
 ### Controlling resource usage
 
@@ -169,8 +244,8 @@ docker build --build-arg BUILD_JOBS=4 -f Dockerfiles/Dockerfile.cli-only.alpine 
 # --memory / --cpu-quota — cap the Docker container's total RAM and CPU during build
 docker build --build-arg BUILD_JOBS=4 --memory=4g --cpu-quota=200000 -f Dockerfiles/Dockerfile.cli-only.alpine -t qlever-cli:alpine .
 
-# BUILD_JOBS via environment variable (docker compose)
-BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine.yml up
+# BUILD_JOBS via environment variable (docker compose incremental builder)
+BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine.yml run --rm builder
 
 # --allocator-memory-gb — limit qlever-cli runtime working memory for queries/updates (default: 4 GB)
 qlever-cli --allocator-memory-gb 2 query ./databases/myindex "SELECT * WHERE { ?s ?p ?o } LIMIT 10"

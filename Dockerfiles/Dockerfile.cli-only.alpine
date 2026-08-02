@@ -5,7 +5,14 @@ ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV LC_CTYPE=C.UTF-8
 
-FROM base AS builder
+# Toolchain-only stage. Build it on its own to get a compiler image that can
+# drive fast incremental builds against a bind-mounted source tree:
+#   docker build --target deps -t qlever-builder:alpine \
+#     -f Dockerfiles/Dockerfile.cli-only.alpine .
+# See "Fast local build and test" in README.md. Building the `builder` target
+# instead compiles the whole source inside the image, which is what the
+# release flow wants but is far too slow to iterate on.
+FROM base AS deps
 # Install build dependencies
 RUN apk add --no-cache \
     build-base \
@@ -24,6 +31,8 @@ RUN apk add --no-cache \
     boost-dev \
     linux-headers \
     util-linux-dev
+
+FROM deps AS builder
 
 # Copy source files
 COPY src /qlever/src/
