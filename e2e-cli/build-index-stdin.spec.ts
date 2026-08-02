@@ -4,14 +4,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // Regression test: after an upstream merge, File.h lost its openFromFilePointer
-// method and ParallelBuffer.cpp stopped mapping "-" to stdin. This caused
+// method and the parser's file source stopped mapping "-" to stdin. This caused
 // build-index with path "-" to fail with:
 //   ERROR opening file "/dev/stdin" with mode "r" (No such device or address)
 // inside Docker on Alpine (where /dev/stdin is not available as a device file).
 //
 // Required fixes (re-apply after every upstream merge):
-//   src/util/File.h              — public openFromFilePointer(FILE*) method
-//   src/parser/ParallelBuffer.cpp — open() must branch on filename == "-"
+//   src/util/File.h                 — public openFromFilePointer(FILE*) method
+//   src/parser/AsyncBlockSource.cpp — the `FileBlockSource` constructor must
+//                                     branch on filename == "-"
+//
+// NOTE: upstream replaced `ParallelBuffer` with `AsyncBlockSource` (boost::asio)
+// in #3023, so the "-" branch lives in `FileBlockSource` now; before that merge
+// it was in `ParallelFileBuffer` in `src/parser/ParallelBuffer.cpp`.
 
 const LOCAL_E2E_DIR = path.resolve(__dirname);
 const LOCAL_DB_DIR = path.join(LOCAL_E2E_DIR, 'test-db-stdin');

@@ -26,6 +26,7 @@
 #include "engine/QueryPlanner.h"
 #include "index/InputFileSpecification.h"
 #include "index/LocalVocab.h"
+#include "index/TripleComponentConversions.h"
 #include "index/vocabulary/PolymorphicVocabulary.h"
 #include "index/vocabulary/VocabularyType.h"
 #include "parser/RdfParser.h"
@@ -379,7 +380,8 @@ int executeWriteOrDelete(const std::string& indexBasename,
                                ": " + format + ". Use ttl, nt, or nq.");
     }
 
-    std::string actualInputFile = inputFile;  // "-" is handled by ParallelBuffer (maps to stdin)
+    // "-" is handled by `FileBlockSource` (maps to stdin).
+    std::string actualInputFile = inputFile;
 
     qlever::EngineConfig config;
     config.baseName_ = indexBasename;
@@ -397,19 +399,21 @@ int executeWriteOrDelete(const std::string& indexBasename,
     }
 
     std::unique_ptr<RdfParserBase> parser;
-    // Upstream's `RdfStreamParser` now takes an already-opened `ParallelBuffer`
-    // instead of a filename + buffer size. Build a `ParallelFileBuffer` from
-    // the input file ("-" maps to stdin, see ParallelBuffer.cpp).
+    // Upstream's `RdfStreamParser` takes an `InputFileSpecification` plus a
+    // blocksize and creates its own I/O thread and `AsyncBlockSource`
+    // internally ("-" maps to stdin, see `FileBlockSource` in
+    // `AsyncBlockSource.cpp`).
+    qlever::InputFileSpecification spec;
+    spec.source_ = actualInputFile;
+    spec.filetype_ = filetype;
     if (filetype == qlever::Filetype::NQuad) {
       parser = std::make_unique<RdfStreamParser<NQuadParser<TokenizerCtre>>>(
-          std::make_unique<ParallelFileBuffer>(
-              DEFAULT_PARSER_BUFFER_SIZE.getBytes(), actualInputFile),
-          &qlever->encodedIriManager(), std::move(defaultGraphTc));
+          spec, DEFAULT_PARSER_BUFFER_SIZE, &qlever->encodedIriManager(),
+          std::move(defaultGraphTc));
     } else {
       parser = std::make_unique<RdfStreamParser<TurtleParser<TokenizerCtre>>>(
-          std::make_unique<ParallelFileBuffer>(
-              DEFAULT_PARSER_BUFFER_SIZE.getBytes(), actualInputFile),
-          &qlever->encodedIriManager(), std::move(defaultGraphTc));
+          spec, DEFAULT_PARSER_BUFFER_SIZE, &qlever->encodedIriManager(),
+          std::move(defaultGraphTc));
     }
 
     LocalVocab localVocab;
@@ -435,7 +439,9 @@ int executeWriteOrDelete(const std::string& indexBasename,
         }
         return it->second;
       }
-      return std::move(tc).toValueId(indexImpl, localVocab);
+      // Upstream moved the index-dependent conversions off `TripleComponent`
+      // into free functions in `index/TripleComponentConversions.h`.
+      return toValueId(std::move(tc), indexImpl, localVocab);
     };
 
     size_t totalProcessed = 0;

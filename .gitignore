@@ -70,3 +70,7 @@ e2e-cli/test-db-stdin/
 # AI tool config
 .claude
 .claude/settings.json
+
+# Test index artifacts that are generated when a unit-test binary is run with
+# the repository root as its working directory.
+/_staticGlobalTestIndex*

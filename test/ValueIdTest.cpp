@@ -13,8 +13,8 @@
 #include "./util/IndexTestHelpers.h"
 #include "backports/algorithm.h"
 #include "global/ValueId.h"
-#include "index/EncodedIriManager.h"
 #include "index/LocalVocabEntry.h"
+#include "index/vocabulary/EncodedIriManager.h"
 #include "util/HashSet.h"
 #include "util/Random.h"
 #include "util/Serializer/ByteBufferSerializer.h"
@@ -34,8 +34,9 @@ TEST_F(ValueIdTest, makeFromDouble) {
     // This check expresses the precision more exactly
     if (id.getDouble() != d) {
       // The if is needed for the case of += infinity.
-      ASSERT_NEAR(id.getDouble(), d,
-                  std::abs(d / (1ul << (52 - ValueId::numDatatypeBits))));
+      ASSERT_NEAR(
+          id.getDouble(), d,
+          std::abs(d / (uint64_t{1} << (52 - ValueId::numDatatypeBits))));
     }
   };
 
@@ -320,11 +321,12 @@ TEST_F(ValueIdTest, Hashing) {
     LocalVocab lv1;
     LocalVocab lv2;
     Iri iri = Iri::fromIriref("<foo>");
-    LocalVocabEntry lve1(iri, index);
-    LocalVocabEntry lve2(iri, index);
-    LocalVocabEntry lve3 =
-        LocalVocabEntry::fromStringRepresentation("\"foo\"", index);
-    LocalVocabEntry lve4 = LocalVocabEntry::fromIriref("<x>", index);
+    LocalVocabEntry lve1(iri, index.getLocalVocabContext());
+    LocalVocabEntry lve2(iri, index.getLocalVocabContext());
+    LocalVocabEntry lve3 = LocalVocabEntry::fromStringRepresentation(
+        "\"foo\"", index.getLocalVocabContext());
+    LocalVocabEntry lve4 =
+        LocalVocabEntry::fromIriref("<x>", index.getLocalVocabContext());
     auto LVID = [](LocalVocabEntry& lve, LocalVocab& lv) {
       return Id::makeFromLocalVocabIndex(lv.getIndexAndAddIfNotContained(lve));
     };
@@ -464,4 +466,25 @@ TEST(ValueId, isTrivial) {
   EXPECT_FALSE(
       Id::makeFromBlankNodeIndex(BlankNodeIndex::make(17)).isTrivial());
   EXPECT_FALSE(Id::makeFromEncodedVal(738).isTrivial());
+}
+
+// _____________________________________________________________________________
+TEST(ValueId, canBeComparedBitwise) {
+  EXPECT_TRUE(Id::makeUndefined().canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromBool(true).canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromInt(1337).canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromDouble(3.14).canBeComparedBitwise());
+  EXPECT_TRUE(
+      Id::makeFromVocabIndex(VocabIndex::make(0)).canBeComparedBitwise());
+  EXPECT_FALSE(Id::makeFromLocalVocabIndex(nullptr).canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromTextRecordIndex(TextRecordIndex::make(0))
+                  .canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromDate(DateYearOrDuration{Date{0, 0, 0}})
+                  .canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromGeoPoint(GeoPoint{0, 0}).canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromWordVocabIndex(WordVocabIndex::make(0))
+                  .canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromBlankNodeIndex(BlankNodeIndex::make(17))
+                  .canBeComparedBitwise());
+  EXPECT_TRUE(Id::makeFromEncodedVal(738).canBeComparedBitwise());
 }

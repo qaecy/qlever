@@ -17,7 +17,12 @@ Index::Index(Index&&) noexcept = default;
 // Needs to be in the .cpp file because of the unique_ptr to a forwarded class.
 // See
 // https://stackoverflow.com/questions/13414652/forward-declaration-with-unique-ptr
-Index::~Index() = default;
+Index::~Index() {
+  if (pimpl_) {
+    AD_LOG_INFO << "Index at " << pimpl_->getOnDiskBase() << " was unloaded."
+                << std::endl;
+  }
+}
 
 // ____________________________________________________________________________
 void Index::createFromOnDiskIndex(const std::string& onDiskBase,
@@ -44,13 +49,6 @@ auto Index::getNonConstVocabForTesting() -> Vocab& {
 // ____________________________________________________________________________
 ad_utility::BlankNodeManager* Index::getBlankNodeManager() const {
   return pimpl_->getBlankNodeManager();
-}
-
-// ____________________________________________________________________________
-size_t Index::getCardinality(
-    Id id, Permutation::Enum p,
-    const LocatedTriplesState& locatedTriplesState) const {
-  return pimpl_->getCardinality(id, p, locatedTriplesState);
 }
 
 // ____________________________________________________________________________
@@ -302,7 +300,6 @@ const GraphNameManager& Index::graphNameManager() const {
 }
 
 // ____________________________________________________________________________
-const std::optional<std::filesystem::path>&
-Index::getPersistedGraphNameManager() const {
-  return pimpl_->getPersistedGraphNameManager();
+const LocalVocabContext& Index::getLocalVocabContext() const {
+  return pimpl_->getLocalVocabContext();
 }

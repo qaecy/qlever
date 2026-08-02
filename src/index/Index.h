@@ -15,10 +15,11 @@
 #include "index/GraphNameManager.h"
 #include "index/InputFileSpecification.h"
 #include "index/Permutation.h"
-#include "index/StringSortComparator.h"
 #include "index/TextScanMode.h"
 #include "index/TextScoringEnum.h"
-#include "index/Vocabulary.h"
+#include "index/vocabulary/EncodedIriManager.h"
+#include "index/vocabulary/StringSortComparator.h"
+#include "index/vocabulary/Vocabulary.h"
 #include "parser/TripleComponent.h"
 #include "util/CancellationHandle.h"
 #include "util/json.h"
@@ -27,6 +28,7 @@
 class IdTable;
 class TextBlockMetaData;
 class IndexImpl;
+class LocalVocabContext;
 struct LocatedTriplesState;
 class DeltaTriplesManager;
 
@@ -122,16 +124,10 @@ class Index {
   // Get a reference to the GraphNameManager of this Index.
   GraphNameManager& graphNameManager();
   const GraphNameManager& graphNameManager() const;
-  const std::optional<std::filesystem::path>& getPersistedGraphNameManager()
-      const;
 
   // --------------------------------------------------------------------------
   // RDF RETRIEVAL
   // --------------------------------------------------------------------------
-  [[nodiscard]] size_t getCardinality(
-      Id id, Permutation::Enum permutation,
-      const LocatedTriplesState& locatedTriplesState) const;
-
   // TODO<joka921> Once we have an overview over the folding this logic should
   // probably not be in the index class.
   RdfsVocabulary::AccessReturnType indexToString(VocabIndex id) const;
@@ -250,6 +246,12 @@ class Index {
 
   // Allow implicit conversions to `const IndexImpl&`.
   operator const IndexImpl&() const { return getImpl(); }
+
+  // Return this index as the context of the `LocalVocabEntry`s that belong to
+  // it. Defined out of line, such that the callers only need the forward
+  // declaration of `LocalVocabContext` above and not the complete type (which
+  // would require the rather expensive `IndexImpl.h`).
+  const LocalVocabContext& getLocalVocabContext() const;
 };
 
 #endif  // QLEVER_SRC_INDEX_INDEX_H

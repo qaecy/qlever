@@ -232,9 +232,10 @@ class QleverCliContext {
   void writeMaterializedView(const std::string& name,
                              const std::string& queryString) {
     auto plan = parseAndPlanQuery(queryString);
-    qlever::QueryPlan qleverPlan =
-        std::make_tuple(plan.qet, plan.qec, plan.parsedQuery);
-    materializedViewsManager_.writeViewToDisk(name, qleverPlan);
+    // Upstream unified `qlever::QueryPlan` (a tuple) and `PlannedQuery` into a
+    // single `qlever::PlannedQuery` class (#3011).
+    qlever::PlannedQuery plannedQuery{plan.parsedQuery, *plan.qet, *plan.qec};
+    materializedViewsManager_.writeViewToDisk(name, plannedQuery);
   }
 
   // Load a previously written materialized view from disk into memory so that
