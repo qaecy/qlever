@@ -204,6 +204,24 @@ following rules:
    Without this, `write -` and `delete -` fail on Alpine Docker where
    /dev/stdin is not fopen()-able as a regular file.
 
+   src/index/DeltaTriples.{h,cpp} — two hardening patches that make concurrent
+   delta writes safe even when advisory locking is unavailable. Applying a delta
+   is a read-modify-write of the *whole* file, so without these a second writer
+   silently destroys the first one's triples:
+   a) `writeToDisk()` must serialize to a UNIQUE temporary path
+      (`<file>.tmp.<pid>.<counter>`), never a shared `<file>.tmp`. With a shared
+      name, concurrent writers interleave bytes in one file and rename it into
+      place, corrupting the delta outright.
+   b) `DeltaTriples` must keep the `(st_dev, st_ino)` of the delta file as of
+      the last read/write (`persistedFileIdentity_`, set in `readFromDisk()` and
+      refreshed in `writeToDisk()`), and `writeToDisk()` must throw rather than
+      clobber a file that no longer matches. Every write renames a fresh temp
+      file over the target, so the inode changes on any write and the token is
+      exact.
+   Keep `DeltaTriplesManager::setFilenameForPersistentUpdates` passing `false`
+   for `writeToDiskAfterRequest`; otherwise merely opening an index rewrites the
+   delta and every reader becomes a writer.
+
 3. Upstream also drifts its engine APIs between merges. These broke previously
    and are likely to move again — fix them at the call site rather than
    reverting upstream:
