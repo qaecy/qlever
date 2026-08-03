@@ -12,6 +12,11 @@
 #ifndef QLEVER_SRC_INDEX_DELTATRIPLES_H
 #define QLEVER_SRC_INDEX_DELTATRIPLES_H
 
+#include <atomic>
+#include <cstdint>
+#include <optional>
+#include <utility>
+
 #include "backports/three_way_comparison.h"
 #include "engine/UpdateMetadata.h"
 #include "global/IdTriple.h"
@@ -124,6 +129,34 @@ class DeltaTriples {
 
   // See the documentation of `setPersist()` below.
   std::optional<std::string> filenameForPersisting_;
+
+  // Identity `(st_dev, st_ino)` of the persisted delta file as this instance
+  // last observed it, i.e. as of the last `readFromDisk()` or `writeToDisk()`.
+  // `nullopt` means "the file did not exist when we last looked".
+  //
+  // This is a compare-and-swap token guarding against a concurrent process
+  // replacing the delta file underneath us. It is exact rather than heuristic:
+  // `writeToDisk()` always renames a freshly created temporary file over the
+  // target, so any write by anyone changes the inode by construction.
+  //
+  // NOTE (QAECY): applying a delta is a read-modify-write of the *entire*
+  // file, so two processes doing it concurrently silently lose each other's
+  // triples. The CLI serializes them with an advisory `flock`, but advisory
+  // locking is not dependable on every filesystem (it was observed to fail on
+  // Docker Desktop's VirtioFS bind mounts, and is unreliable on gcsfuse/NFS).
+  // This check makes the lost update a loud, retryable error instead of silent
+  // data loss, without depending on the filesystem's locking semantics.
+  // Mutable because `writeToDisk()` is `const` but must refresh this token.
+  mutable std::optional<std::pair<uint64_t, uint64_t>> persistedFileIdentity_;
+
+  // Makes the temporary filenames used by `writeToDisk()` unique within a
+  // process; the process id makes them unique across processes.
+  static inline std::atomic<uint64_t> tempFileCounter_{0};
+
+  // Return `(st_dev, st_ino)` for `filename`, or `nullopt` if it cannot be
+  // stat'ed (in particular if it does not exist).
+  static std::optional<std::pair<uint64_t, uint64_t>> getFileIdentity(
+      const std::string& filename);
 
   // Store the id of the `ql:langtag` predicate to avoid repeated disk lookups.
   // This is initialized on first use.

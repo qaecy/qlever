@@ -13,6 +13,8 @@
 #include "index/DeltaTriples.h"
 
 #include <absl/strings/str_cat.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "Permutation.h"
 #include "backports/algorithm.h"
@@ -661,13 +663,54 @@ void DeltaTriples::writeToDisk() const {
                }) |
            ql::views::join;
   };
-  ql::filesystem::path tempPath = filenameForPersisting_.value();
-  tempPath += ".tmp";
+  const std::string& target = filenameForPersisting_.value();
+
+  // Refuse to clobber a delta file that somebody else has written since we
+  // read ours: applying a delta rewrites the whole file, so proceeding would
+  // silently discard the other writer's triples. See
+  // `persistedFileIdentity_`.
+  auto current = getFileIdentity(target);
+  if (current != persistedFileIdentity_) {
+    throw std::runtime_error(absl::StrCat(
+        "The file for persistent updates '", target,
+        "' was modified by another process while this process was applying an "
+        "update. Applying an update rewrites the entire file, so continuing "
+        "would silently discard the other process's triples. No changes were "
+        "written; retry the operation. Note that concurrent writers to one "
+        "index must be serialized externally."));
+  }
+
+  // Serialize to a *unique* temporary path. A shared, fixed temporary name
+  // (this used to be `target + ".tmp"`) lets two concurrent writers interleave
+  // their bytes in one file and then rename it into place, which produces a
+  // structurally corrupt delta rather than merely a lost update. It also makes
+  // the loser's rename fail with ENOENT once the winner has renamed the file
+  // away.
+  ql::filesystem::path tempPath = absl::StrCat(
+      target, ".tmp.", ::getpid(), ".", tempFileCounter_.fetch_add(1));
   ad_utility::serializeIds(
       tempPath, localVocab_,
       std::array{toRange(triplesSetsNormal_.triplesDeleted_),
                  toRange(triplesSetsNormal_.triplesInserted_)});
-  ql::filesystem::rename(tempPath, filenameForPersisting_.value());
+  try {
+    ql::filesystem::rename(tempPath, target);
+  } catch (...) {
+    std::error_code ignored;
+    ql::filesystem::remove(tempPath, ignored);
+    throw;
+  }
+  persistedFileIdentity_ = getFileIdentity(target);
+}
+
+// _____________________________________________________________________________
+std::optional<std::pair<uint64_t, uint64_t>> DeltaTriples::getFileIdentity(
+    const std::string& filename) {
+  struct stat info {};
+  if (::stat(filename.c_str(), &info) != 0) {
+    return std::nullopt;
+  }
+  return std::pair<uint64_t, uint64_t>{static_cast<uint64_t>(info.st_dev),
+                                       static_cast<uint64_t>(info.st_ino)};
 }
 
 // _____________________________________________________________________________
@@ -676,6 +719,12 @@ void DeltaTriples::readFromDisk() {
     return;
   }
   AD_CONTRACT_CHECK(localVocab_.empty());
+  // Remember which file we are reading, so that `writeToDisk()` can detect a
+  // concurrent writer having replaced it in the meantime. Record this *before*
+  // deserializing: if another process replaces the file while we read it, the
+  // identity we captured is already stale and the guard fires, which is the
+  // outcome we want.
+  persistedFileIdentity_ = getFileIdentity(filenameForPersisting_.value());
   auto [vocab, idRanges] = ad_utility::deserializeIds(
       filenameForPersisting_.value(), index_.getLocalVocabContext());
   if (idRanges.empty()) {
