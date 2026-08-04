@@ -51,7 +51,26 @@ Limit parallelism with `BUILD_JOBS=4 docker compose -f docker-compose.cli-alpine
 
 The `e2e-native` service bind-mounts `./build-alpine/qlever-cli` over `/workspace/qlever-cli` (the path the spec files use) rather than overwriting the checked-in binary at the repo root, so this flow never touches it. `node_modules` is shadowed by an anonymous volume so an `npm install` here cannot clobber the architecture-specific tree a release run installed.
 
-**This flow does not refresh the `qlever-cli` binary at the repo root** — that is a `linux/amd64` build and is produced by the release flow below.
+**This flow does not refresh the `qlever-cli` binary at the repo root** — that is a `linux/amd64` build and is produced by one of the two flows below.
+
+### Incremental amd64 flow (a deployable binary without a full rebuild)
+
+The release flow below recompiles everything inside the image, which takes hours under emulation. When only a few files changed and all that is needed is a fresh `linux/amd64` binary, this is the same incremental build as above but emulated, writing to its own `./build-alpine-amd64` directory so it never invalidates the native build's cache.
+
+```bash
+# 1. Toolchain image for amd64 (once). A separate tag from qlever-builder:alpine,
+#    which is built for the host architecture.
+docker build --platform linux/amd64 --target deps \
+  -t qlever-builder:alpine-amd64 -f Dockerfiles/Dockerfile.cli-only.alpine .
+
+# 2. Compile into ./build-alpine-amd64.
+docker compose -f docker-compose.cli-alpine.yml run --rm builder-amd64
+
+# 3. That binary is what `databases-qlever` copies as
+#    data/binaries/qlever-cli_alpine-x86_64-<version>.
+```
+
+This skips the unit and e2e tests that the release flow runs as part of the image build, so run them against the native build first (steps 3 and 4 above). It is a shortcut for producing a binary, not a substitute for the release flow.
 
 ### Release flow (linux/amd64 image + deployable binary)
 
@@ -103,6 +122,35 @@ After extracting the binary (step 2 of the release flow above), run `./qlever-cl
 For annotated usage examples see [README_examples.md](README_examples.md).
 
 When developing with the fast local flow, the equivalent binary is `./build-alpine/qlever-cli`.
+
+### Passing a large query or update
+
+`query`, `update`, `query-to-file` and `query-json` accept **`-`** in place of the
+query text, meaning "read it from stdin":
+
+```bash
+./qlever-cli update /mnt/qlever/proj/full - < big-insert.ru
+./qlever-cli query  /mnt/qlever/proj/full - nt < big-construct.rq
+```
+
+This is not a convenience. `execve` caps a single argument at `MAX_ARG_STRLEN` —
+32 pages, i.e. **131072 bytes** on Linux, regardless of how large `ARG_MAX` is —
+so past that the process fails with `E2BIG` before `main` runs and the caller sees
+only an opaque spawn failure. 128 KiB is roughly 2,400 triples in an
+`INSERT DATA`, which is not a large write:
+
+| `INSERT DATA` size | via argv | via stdin |
+| --- | --- | --- |
+| 105 KiB (2,000 triples) | ✅ | ✅ |
+| 132 KiB (2,500 triples) | ❌ `E2BIG` | ✅ |
+| 276 KiB (5,000 triples) | ❌ `Argument list too long` | ✅ 5,000 inserted |
+
+It does **not** avoid holding the query in memory — `SparqlParser` needs the whole
+string — it removes an arbitrary hard ceiling. Bound the size of an update at the
+HTTP layer, where it can be reported properly.
+
+`-` never collides with the `write`/`delete` stdin convention: those read RDF from
+stdin and take no query, while `query`/`update` take a query and read no data.
 
 ## Troubleshooting the test flows
 

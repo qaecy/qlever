@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -183,13 +184,15 @@ void printUsage(const char* programName, std::ostream& out = std::cerr) {
   out << "  --allocator-memory-gb <GB>  Set memory limit (default: 4 GB, "
          "env: QLEVER_MEMORY_LIMIT_GB)\n\n";
   out << "Commands:\n";
-  out << "  query       <index_basename> <sparql_query> [output_format] "
+  out << "  (pass '-' in place of a query/update to read it from stdin, which\n"
+         "   avoids the kernel's ~128 KiB per-argument limit)\n";
+  out << "  query       <index_basename> <sparql_query|-> [output_format] "
          "[name]  Execute SPARQL query (optionally pin result)\n";
-  out << "  query-to-file <index_basename> <sparql_query> <format> "
+  out << "  query-to-file <index_basename> <sparql_query|-> <format> "
          "<output_file>  Execute CONSTRUCT query to file\n";
-  out << "  update      <index_basename> <sparql_update_query>  Execute "
+  out << "  update      <index_basename> <sparql_update_query|->  Execute "
          "SPARQL UPDATE query\n";
-  out << "  query-json  <json_input>                      Execute query "
+  out << "  query-json  <json_input|->                    Execute query "
          "from JSON input\n";
   out << "  write       <index_basename> <format> <input_file> [--graph <uri>] "
          " Execute write from stream (use '-' for stdin)\n";
@@ -256,6 +259,39 @@ void printUsage(const char* programName, std::ostream& out = std::cerr) {
   out << "  on-disk-compressed-geo-split - Required for GeoSPARQL support\n";
 }
 
+// Read a SPARQL query or update from stdin, for callers that pass "-" in place
+// of the query text.
+//
+// WHY THIS EXISTS: passing the query as an argv element caps it at the kernel's
+// per-argument limit — `MAX_ARG_STRLEN` on Linux, which is 32 pages = 128 KiB
+// regardless of how large `ARG_MAX` is. Past that, `execve` fails with `E2BIG`
+// before the binary even starts, so the caller gets an opaque spawn failure
+// rather than anything it can act on. 128 KiB is roughly 2,400 triples in an
+// `INSERT DATA`, which is not a large write by any reasonable standard.
+//
+// Note this does NOT avoid holding the query in memory: `SparqlParser` needs the
+// whole string. It removes an arbitrary hard ceiling, nothing more. Bounding the
+// size of an update is the caller's job (an HTTP body limit), where it can be
+// reported properly.
+//
+// "-" follows the convention already used by `write`/`delete` for stdin input.
+// The two never collide: `write` reads RDF from stdin and takes no query, while
+// `query`/`update` take a query and read no data.
+static std::string readQueryFromStdin() {
+  std::ostringstream buffer;
+  buffer << std::cin.rdbuf();
+  if (std::cin.bad()) {
+    throw std::runtime_error("Failed to read the query from stdin");
+  }
+  return buffer.str();
+}
+
+// Resolve a query argument: "-" means "read it from stdin", anything else is the
+// query itself.
+static std::string resolveQueryArg(const std::string& arg) {
+  return arg == "-" ? readQueryFromStdin() : arg;
+}
+
 // Flush stdout/stderr and call _exit() to bypass QLever's destructors.
 // QleverCliContext's background threads (DeltaTriplesManager etc.) do not
 // join cleanly, causing hangs or crashes (including under Rosetta/emulation).
@@ -307,14 +343,24 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
 
     auto qlever = std::make_shared<qlever::QleverCliContext>(config);
     cli_utils::QueryExecutor executor(qlever);
-    std::string result;
 
     {
       cli_utils::SuppressStreams suppress;
+      // Write each chunk to stdout as the exporter produces it, rather than
+      // building the whole response in memory and printing it at the end. For a
+      // CONSTRUCT returning a large subgraph that buffer was the dominant memory
+      // cost of the process, and it sat outside `--allocator-memory-gb` — so it
+      // was invisible to the memory limit and to the `?memoryGb` override built
+      // on top of it. Streaming also means the caller sees the first rows while
+      // the rest is still being computed.
+      //
+      // Safe to write to `cout` from inside this scope: `SuppressStreams`
+      // redirects only `cerr` and `clog`.
+      auto sink = [](const std::string& chunk) { std::cout << chunk; };
       if (type == "CONSTRUCT" || type == "DESCRIBE") {
-        result = executor.executeConstructQueryToString(queryStr, format);
+        executor.executeConstructQueryToSink(queryStr, format, sink);
       } else {
-        result = executor.executeQuery(queryStr, format);
+        executor.executeQueryToSink(queryStr, format, sink);
       }
 
       if (!name.empty()) {
@@ -322,9 +368,18 @@ int executeQuery(const std::string& indexBasename, const std::string& queryStr,
       }
     }
 
-    std::cout << result << std::endl;
+    // Trailing newline, as when the whole result was printed with `std::endl`.
+    std::cout << "\n";
     flushAndExit(0);
   } catch (const std::exception& e) {
+    // Errors raised before the first chunk reaches the sink still produce a clean
+    // failure with an empty stdout: `computeResult` wraps its generator in
+    // `convertStreamGeneratorForChunkedTransfer`, which computes the first ~1MB
+    // eagerly and rethrows here. That is what the service's query-recovery path
+    // relies on (it only retries while nothing has been streamed to the client).
+    // A failure later in the export is appended to the output as a `!!!!>>#`
+    // marker by the exporter itself — unchanged behaviour, it simply lands on the
+    // wire now instead of in a string.
     json errorResponse = createErrorResponse(e.what());
     std::cerr << errorResponse.dump(2) << std::endl;
     flushAndExit(1);
@@ -1080,16 +1135,17 @@ int main(int argc, char* argv[]) {
     auto statsMemLimit = cli_utils::resolveMemoryLimit(parsed.maxMemoryGb, 1.0);
 
     if (command == "query" && (nargs == 4 || nargs == 5 || nargs == 6)) {
-      // query <index_basename> <sparql_query> [format] [name]
+      // query <index_basename> <sparql_query|-> [format] [name]
       std::string format = (nargs >= 5) ? args[4] : "";
       std::string name = (nargs == 6) ? args[5] : "";
-      return executeQuery(args[2], args[3], memLimit, format, name);
+      return executeQuery(args[2], resolveQueryArg(args[3]), memLimit, format,
+                          name);
     } else if (command == "update" && nargs == 4) {
-      // update <index_basename> <sparql_update_query>
-      return executeUpdate(args[2], args[3], memLimit);
+      // update <index_basename> <sparql_update_query|->
+      return executeUpdate(args[2], resolveQueryArg(args[3]), memLimit);
     } else if (command == "query-json" && nargs == 3) {
-      // query-json <json_input>
-      return executeJsonQuery(args[2], memLimit);
+      // query-json <json_input|->
+      return executeJsonQuery(resolveQueryArg(args[2]), memLimit);
     } else if (command == "write" && nargs >= 5) {
       // write <index_basename> <format> <input_file> [default_graph]
       // write <index_basename> <format> <input_file> --graph <uri>
@@ -1113,7 +1169,8 @@ int main(int argc, char* argv[]) {
       return executeWriteOrDelete(args[2], args[3], args[4], true, memLimit,
                                   defaultGraph);
     } else if (command == "query-to-file" && nargs == 6) {
-      return executeQueryToFile(args[2], args[3], args[4], args[5], memLimit);
+      return executeQueryToFile(args[2], resolveQueryArg(args[3]), args[4],
+                                args[5], memLimit);
     } else if (command == "stats" && nargs == 3) {
       return getIndexStats(args[2], statsMemLimit);
     } else if (command == "build-index" && nargs == 3) {

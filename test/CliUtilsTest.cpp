@@ -8,6 +8,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -22,6 +23,7 @@
 
 #include "cli-utils/CliArgs.h"
 #include "cli-utils/QueryTypeDetect.h"
+#include "cli-utils/LineChunker.h"
 #include "cli-utils/StreamSuppressor.h"
 #include "util/MemorySize/MemorySize.h"
 
@@ -703,4 +705,117 @@ TEST(ResolveMemoryLimit, MalformedEnvFallsToDefault) {
   ::unsetenv("QLEVER_MEMORY_LIMIT_GB");
   EXPECT_EQ(ms.getBytes(),
             static_cast<size_t>(4.0 * 1024.0 * 1024.0 * 1024.0));
+}
+
+// ---------------------------------------------------------------------------
+// LineChunker — reassembling lines from arbitrarily-split chunks.
+//
+// This exists because the CLI streams query results instead of buffering them.
+// `ExportQueryExecutionTrees::computeResult` yields ~1MB chunks whose boundaries
+// fall wherever its byte budget runs out, so any per-line post-processing of the
+// output (the N-Quads rewrite, the to-file triple filter) has to carry a partial
+// trailing line into the next chunk. Getting that wrong does not fail loudly: it
+// silently emits truncated triples, or for N-Quads a triple with a graph term
+// welded into the middle of it. Hence: split the same input every possible way
+// and require the output to be invariant.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Collect the lines `LineChunker` produces for a given chunking of `input`.
+std::vector<std::string> chunkIntoLines(const std::vector<std::string>& chunks) {
+  std::vector<std::string> lines;
+  cli_utils::LineChunker chunker{
+      [&lines](const std::string& line) { lines.push_back(line); }};
+  for (const auto& chunk : chunks) {
+    chunker.feed(chunk);
+  }
+  chunker.finish();
+  return lines;
+}
+}  // namespace
+
+TEST(LineChunker, SplitsOnNewlinesAndDropsThem) {
+  EXPECT_THAT(chunkIntoLines({"a\nb\nc\n"}),
+              ::testing::ElementsAre("a", "b", "c"));
+}
+
+TEST(LineChunker, EmitsATrailingLineWithNoNewline) {
+  // `std::getline` over a buffered result returned this line, so dropping it
+  // here would lose the last triple of every result that lacks a final newline.
+  EXPECT_THAT(chunkIntoLines({"a\nb"}), ::testing::ElementsAre("a", "b"));
+}
+
+TEST(LineChunker, OutputIsIdenticalForEverySplitPosition) {
+  // The property that matters. If any single split point changed the result, a
+  // chunk boundary landing there would corrupt the output.
+  const std::string input =
+      "<a> <b> <c> .\n<d> <e> \"f\\nliteral\" .\n<g> <h> <i> .\n";
+  const auto expected = chunkIntoLines({input});
+  ASSERT_EQ(expected.size(), 3u);
+
+  for (std::size_t split = 0; split <= input.size(); ++split) {
+    const auto actual = chunkIntoLines(
+        {input.substr(0, split), input.substr(split)});
+    EXPECT_EQ(actual, expected) << "differs when split at offset " << split;
+  }
+}
+
+TEST(LineChunker, HandlesByteAtATimeAndEmptyChunks) {
+  const std::string input = "one\ntwo\nthree";
+  std::vector<std::string> bytes;
+  for (char c : input) bytes.emplace_back(1, c);
+  EXPECT_THAT(chunkIntoLines(bytes),
+              ::testing::ElementsAre("one", "two", "three"));
+
+  // An empty chunk must not be mistaken for end-of-input and flush `pending_`.
+  EXPECT_THAT(chunkIntoLines({"par", "", "tial\n", ""}),
+              ::testing::ElementsAre("partial"));
+}
+
+TEST(LineChunker, EmptyInputProducesNoLines) {
+  EXPECT_THAT(chunkIntoLines({}), ::testing::IsEmpty());
+  EXPECT_THAT(chunkIntoLines({""}), ::testing::IsEmpty());
+  // A bare newline is an empty line, which the triple filter then drops.
+  EXPECT_THAT(chunkIntoLines({"\n"}), ::testing::ElementsAre(""));
+}
+
+TEST(TripleLineFilter, AcceptsOnlyCompleteStatements) {
+  EXPECT_TRUE(cli_utils::isCompleteTripleLine("<a> <b> <c> ."));
+  // Everything the buffered implementation dropped must still be dropped:
+  // blank lines, Turtle prefix declarations, and CRLF-terminated lines (whose
+  // last character is '\r', not '.').
+  EXPECT_FALSE(cli_utils::isCompleteTripleLine(""));
+  EXPECT_FALSE(cli_utils::isCompleteTripleLine("@prefix ex: <http://ex/>"));
+  EXPECT_FALSE(cli_utils::isCompleteTripleLine("<a> <b> <c> .\r"));
+}
+
+TEST(TripleLineFilter, AppendsTheDefaultGraph) {
+  EXPECT_EQ(cli_utils::toDefaultGraphQuad("<a> <b> <c> ."),
+            "<a> <b> <c>  <http://default.graph/> .\n");
+}
+
+TEST(TripleLineFilter, NQuadRewriteIsInvariantAcrossChunkBoundaries) {
+  // The two pieces composed, which is how the `nq` export actually runs.
+  const std::string input = "<a> <b> <c> .\n\n@prefix p: <q> .\n<d> <e> <f> .";
+  auto rewriteWithSplitAt = [&](std::size_t split) {
+    std::string out;
+    cli_utils::LineChunker chunker{[&out](const std::string& line) {
+      if (cli_utils::isCompleteTripleLine(line)) {
+        out += cli_utils::toDefaultGraphQuad(line);
+      }
+    }};
+    chunker.feed(input.substr(0, split));
+    chunker.feed(input.substr(split));
+    chunker.finish();
+    return out;
+  };
+
+  const std::string expected = rewriteWithSplitAt(0);
+  // Two triples plus the `@prefix` line, which ends in '.' and so is kept —
+  // preserving the buffered implementation's behaviour exactly, warts included.
+  EXPECT_EQ(std::count(expected.begin(), expected.end(), '\n'), 3);
+  for (std::size_t split = 0; split <= input.size(); ++split) {
+    EXPECT_EQ(rewriteWithSplitAt(split), expected)
+        << "differs when split at offset " << split;
+  }
 }

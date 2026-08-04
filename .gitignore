@@ -74,3 +74,6 @@ e2e-cli/test-db-stdin/
 # Test index artifacts that are generated when a unit-test binary is run with
 # the repository root as its working directory.
 /_staticGlobalTestIndex*
+
+# amd64 (release-parity) incremental build directory
+build-alpine-amd64/

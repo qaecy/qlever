@@ -115,19 +115,67 @@ class QleverCliContext {
     return {qetPtr, std::move(qecPtr), std::move(parsedQuery), std::move(handle)};
   }
 
-  std::string query(const QueryPlan& queryPlan,
-                    ad_utility::MediaType mediaType =
-                        ad_utility::MediaType::sparqlJson) const {
+  // A consumer of serialized result chunks. See `queryToSink`.
+  using ResultSink = std::function<void(const std::string&)>;
+
+  // Run a planned query and hand each serialized chunk to `sink` as it is
+  // produced.
+  //
+  // WHY THIS IS THE PRIMITIVE, AND `query()` BELOW THE CONVENIENCE
+  // --------------------------------------------------------------
+  // `ExportQueryExecutionTrees::computeResult` returns a LAZY generator that
+  // serializes the result in ~1MB chunks. Accumulating those chunks into one
+  // `std::string` — which is all `query()` used to do, and all the CLI ever did
+  // with the result — throws that away twice over:
+  //
+  //  - Peak memory grows with the size of the SERIALIZED response, and that
+  //    buffer is allocated on the default allocator, NOT the
+  //    `AllocatorWithLimit<Id>` that `--allocator-memory-gb` bounds. So a
+  //    CONSTRUCT extracting a large subgraph can dwarf its own memory limit
+  //    while staying entirely invisible to it. N-Triples text is typically
+  //    larger than the `IdTable` it was serialized from, so this is not a
+  //    marginal overhead.
+  //  - Time-to-first-byte becomes time-to-LAST-byte: nothing can be written to
+  //    the client until the final row has been computed.
+  //
+  // Error behaviour is unchanged, because `computeResult` already wraps its
+  // generator in `convertStreamGeneratorForChunkedTransfer`: that eagerly
+  // computes the first chunk, so an exception in the first ~1MB of output is
+  // thrown from `computeResult` itself, before `sink` is ever called. Failures
+  // after that point are appended to the output as a `!!!!>>#` marker rather
+  // than raised — which is what already happened, just into a string instead of
+  // onto the wire.
+  void queryToSink(const QueryPlan& queryPlan, const ResultSink& sink,
+                   ad_utility::MediaType mediaType =
+                       ad_utility::MediaType::sparqlJson) const {
     ad_utility::Timer timer{ad_utility::Timer::Started};
     // Reuse the same handle that was used during planning.
     auto handle = queryPlan.handle;
-    std::string result;
     auto responseGenerator = ExportQueryExecutionTrees::computeResult(
         queryPlan.parsedQuery, *queryPlan.qet, mediaType, timer,
         std::move(handle));
     for (const auto& batch : responseGenerator) {
-      result += batch;
+      sink(batch);
     }
+  }
+
+  void queryToSink(std::string queryString, const ResultSink& sink,
+                   ad_utility::MediaType mediaType =
+                       ad_utility::MediaType::sparqlJson) const {
+    queryToSink(parseAndPlanQuery(std::move(queryString)), sink, mediaType);
+  }
+
+  // Buffering convenience wrapper. Correct for callers that genuinely need the
+  // whole result in memory (an UPDATE's metadata, a materialized view, a
+  // document count); prefer `queryToSink` for anything user-facing, which is
+  // unbounded in size.
+  std::string query(const QueryPlan& queryPlan,
+                    ad_utility::MediaType mediaType =
+                        ad_utility::MediaType::sparqlJson) const {
+    std::string result;
+    queryToSink(
+        queryPlan, [&result](const std::string& batch) { result += batch; },
+        mediaType);
     return result;
   }
 
