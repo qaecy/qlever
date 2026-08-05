@@ -26,6 +26,7 @@
 #include "cli-utils/StreamSuppressor.h"
 #include "engine/ExecuteUpdate.h"
 #include "engine/QueryPlanner.h"
+#include "index/DeltaTriples.h"
 #include "index/InputFileSpecification.h"
 #include "index/LocalVocab.h"
 #include "index/TripleComponentConversions.h"
@@ -34,6 +35,7 @@
 #include "parser/RdfParser.h"
 #include "parser/SparqlParser.h"
 #include "parser/TokenizerCtre.h"
+#include "util/CancellationHandle.h"
 #include "util/HashMap.h"
 #include "util/Log.h"
 #include "util/MemorySize/MemorySize.h"
@@ -544,31 +546,50 @@ int executeWriteOrDelete(const std::string& indexBasename,
     };
 
     size_t totalProcessed = 0;
-    while (auto batchOpt = parser->getBatch()) {
-      auto& batch = batchOpt.value();
-      if (batch.empty()) continue;
+    // Drain the parser inside ONE `modify` call, so the delta is consolidated,
+    // written to `.update-triples` and published exactly once — after the LAST
+    // batch. This is what makes the command atomic: an input larger than the
+    // parser's 10 MB block size used to persist each block as it was parsed, so a
+    // syntax error part-way through left the earlier blocks committed while the
+    // command reported failure. Now anything thrown below — a parse error, a
+    // cancelled write, an allocation failure — propagates out of `withDeltaTriples`
+    // before the writeback, leaving the on-disk delta exactly as it was.
+    //
+    // The individual batches therefore use `Consolidate::No`; `withDeltaTriples`
+    // consolidates once at the end. See the note on it in `QleverCliContext.h`.
+    qlever->withDeltaTriples([&](DeltaTriples& deltaTriples) {
+      auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
+      while (auto batchOpt = parser->getBatch()) {
+        auto& batch = batchOpt.value();
+        if (batch.empty()) continue;
 
-      std::vector<IdTriple<0>> idTriples;
-      idTriples.reserve(batch.size());
+        std::vector<IdTriple<0>> idTriples;
+        idTriples.reserve(batch.size());
 
-      for (auto& turtleTriple : batch) {
-        Id sId = tcToId(std::move(turtleTriple.subject_));
-        Id pId = tcToId(std::move(turtleTriple.predicate_));
-        Id oId = tcToId(std::move(turtleTriple.object_));
-        Id gId = tcToId(std::move(turtleTriple.graphIri_));
+        for (auto& turtleTriple : batch) {
+          Id sId = tcToId(std::move(turtleTriple.subject_));
+          Id pId = tcToId(std::move(turtleTriple.predicate_));
+          Id oId = tcToId(std::move(turtleTriple.object_));
+          Id gId = tcToId(std::move(turtleTriple.graphIri_));
 
-        idTriples.push_back(IdTriple<0>{std::array{sId, pId, oId, gId}});
+          idTriples.push_back(IdTriple<0>{std::array{sId, pId, oId, gId}});
+        }
+
+        // `localVocab` stays alive across the call and is reset only afterwards:
+        // `insertTriples`/`deleteTriples` re-home the entries they need into the
+        // `DeltaTriples`' own local vocab, so what is left is dead weight.
+        if (isDelete) {
+          deltaTriples.deleteTriples<DeltaTriples::Consolidate::No>(
+              handle, std::move(idTriples));
+        } else {
+          deltaTriples.insertTriples<DeltaTriples::Consolidate::No>(
+              handle, std::move(idTriples));
+        }
+
+        localVocab = LocalVocab{};
+        totalProcessed += batch.size();
       }
-
-      if (isDelete) {
-        qlever->deleteTriples(std::move(idTriples), std::move(localVocab));
-      } else {
-        qlever->insertTriples(std::move(idTriples), std::move(localVocab));
-      }
-
-      localVocab = LocalVocab{};
-      totalProcessed += batch.size();
-    }
+    });
 
     json response = createSuccessResponse(
         (isDelete ? std::string("Deleted ") : std::string("Inserted ")) +

@@ -56,6 +56,10 @@ build-alpine/
 # CLI e2e test database
 e2e-cli/test-db-extended/
 e2e-cli/test-db-stdin/
+e2e-cli/test-db-atomicity/
+
+# Scratch dir used by ad-hoc CLI verification scripts
+/scratch/
 
 # Ignore RDF files in root directory
 /*.nt

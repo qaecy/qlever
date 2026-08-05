@@ -214,29 +214,40 @@ class QleverCliContext {
     return index_.encodedIriManager();
   }
 
-  void insertTriples(const std::vector<IdTriple<0>>& triples,
-                     LocalVocab localVocab) {
-    auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
-    auto localVocabPtr = std::make_shared<LocalVocab>(std::move(localVocab));
+  // Apply an arbitrary run of insert/delete batches to the delta triples under a
+  // SINGLE `modify` call, then consolidate, persist and publish exactly once.
+  //
+  // WHY THIS EXISTS: every `DeltaTriplesManager::modify` call does four things
+  // that are O(whole delta) rather than O(batch) — consolidate the located
+  // triples, serialize the entire delta to `.update-triples`, recompute the
+  // augmented block metadata, and deep-copy the located-triples state for a new
+  // snapshot. The `write`/`delete` commands feed the parser one
+  // `DEFAULT_PARSER_BUFFER_SIZE` (10 MB) block at a time, so calling
+  // `insertTriples`/`deleteTriples` per block paid all four per block. That made
+  // a multi-block input O(blocks × delta), and — the actual bug — it made the
+  // command NON-ATOMIC: a parse error in block N had already committed blocks
+  // 0..N-1 to `.update-triples`, so the caller got a non-zero exit and an error
+  // on stderr while part of its input was silently persisted.
+  //
+  // Callers must use `Consolidate::No` for the individual batches inside `fn`;
+  // the one required `consolidateAll()` happens here, before `modify` updates the
+  // augmented metadata (which requires consolidated blocks).
+  void withDeltaTriples(const std::function<void(DeltaTriples&)>& fn) {
     index_.deltaTriplesManager().modify<void>(
-        std::function<void(DeltaTriples&)>(
-            [handle, triples,
-             localVocabPtr](DeltaTriples& deltaTriples) mutable {
-              deltaTriples.insertTriples(handle, triples);
-            }));
+        std::function<void(DeltaTriples&)>([&fn](DeltaTriples& deltaTriples) {
+          fn(deltaTriples);
+          deltaTriples.consolidateAll();
+        }));
   }
 
-  void deleteTriples(const std::vector<IdTriple<0>>& triples,
-                     LocalVocab localVocab) {
-    auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
-    auto localVocabPtr = std::make_shared<LocalVocab>(std::move(localVocab));
-    index_.deltaTriplesManager().modify<void>(
-        std::function<void(DeltaTriples&)>(
-            [handle, triples,
-             localVocabPtr](DeltaTriples& deltaTriples) mutable {
-              deltaTriples.deleteTriples(handle, triples);
-            }));
-  }
+  // NOTE: the single-batch `insertTriples(triples, localVocab)` and
+  // `deleteTriples(triples, localVocab)` wrappers were REMOVED in favour of
+  // `withDeltaTriples` above. Each was one `modify` call, so calling either in a
+  // loop — which is what `write`/`delete` did, once per 10 MB parser block — paid
+  // four O(delta) costs per block and persisted each block as it went, making a
+  // multi-block write non-atomic. Do not reintroduce them: a caller that wants
+  // several batches wants one `withDeltaTriples`, and a caller that wants exactly
+  // one batch gets the same thing with a single `Consolidate::No` call inside.
 
   void binaryRebuild(const std::string& indexBaseName,
                      const std::string& outputBaseName = "") {
