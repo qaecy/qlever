@@ -64,6 +64,34 @@ services:
           -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" ..
         ninja -j$$JOBS qlever-cli qlever-index CliUtilsTest CliUtilsRdfTest
 
+  # Incremental build service for Ubuntu, mirroring `builder` above but against
+  # the `qlever-builder:ubuntu` image (built for the host architecture — on
+  # Apple Silicon this is a native arm64 build, no emulation). Requires:
+  #   docker build --target deps -t qlever-builder:ubuntu \
+  #     -f Dockerfiles/Dockerfile.cli-only.ubuntu .
+  # Writes to its own ./build-ubuntu directory so it never invalidates the
+  # Alpine native build's cache. Despite this file's name, `test-runner` below
+  # already serves both Alpine and Ubuntu binaries, so this service lives here
+  # too rather than in a separate compose file.
+  builder-ubuntu:
+    image: qlever-builder:ubuntu
+    volumes:
+      - .:/qlever
+      - ./build-ubuntu:/qlever/build
+    working_dir: /qlever/build
+    user: root
+    environment:
+      - BUILD_JOBS=${BUILD_JOBS:-0}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ "$$BUILD_JOBS" = "0" ]; then JOBS=$$(nproc); else JOBS=$$BUILD_JOBS; fi
+        cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO \
+          -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" ..
+        ninja -j$$JOBS qlever-cli qlever-index CliUtilsTest CliUtilsRdfTest
+
   # Packages the locally-built binaries into a slim Alpine runtime image
   # tagged as qlever-cli:alpine-test (used by the e2e test suite).
   # Run after 'builder' has produced ./build-alpine/qlever-cli.
