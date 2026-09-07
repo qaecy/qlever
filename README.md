@@ -218,7 +218,9 @@ following rules:
         if (view.size() > 1 && view[1] == '<') {
           raise("Found RDF* syntax ('<<')...");
         }
-   b) In RdfStreamParser<T>::getLineImpl(), inside the
+   b) In RdfStreamParser<T>::getBatch() (called getLineImpl() before the
+      upstream merge that renamed it and made it return a whole batch),
+      inside the
       `if (byteVec_.size() > RDF_PARSER_MAX_TOTAL_BUFFER_SIZE().getBytes())`
       block, before the generic AD_LOG_ERROR, add:
         std::string_view unparsed = tok_.view();
@@ -301,8 +303,22 @@ following rules:
      `nullptr` — `nullptr` compiles but silently disables the rewriting, so the
      view loads and is simply never used to answer a query.
 
-   After resolving, verify with the fast local flow in "Build and test" above —
-   it compiles and runs all 81 e2e tests in well under a minute once warm.
+   Resolving a conflict with `git checkout --theirs <file>` replaces the WHOLE
+   file, so it also discards any of our hunks in that file that merged cleanly.
+   After using it, re-check every patch the file is supposed to carry, not just
+   the one that conflicted.
+
+   After resolving, verify with the fast local flow in "Build and test" above.
+   Two e2e failures are expected on macOS and are NOT regressions:
+   - `performance.spec.ts` — exits 127 because `curl` is absent from the
+     e2e-runner image; it downloads a benchmark dataset from GCS.
+   - `extended-commands.spec.ts` "should clone an index" — Docker Desktop's
+     macOS bind mount does not support the syscall behind
+     `std::filesystem::copy_file`, which fails there with EPERM while ordinary
+     writes to the same directory succeed. Reproducible with a three-line
+     program and no QLever code involved; it passes on container-local storage,
+     so `clone` is fine on Linux.
+   Expect 75/86 e2e tests to pass on macOS.
 ```
 
 ## Other image variants
