@@ -857,7 +857,7 @@ if (NOT _EMSCRIPTEN_NO_INDEXBUILDER_AND_SERVER)
 endif()
 
 add_executable(qlever-cli src/QleverCliMain.cpp)
-qlever_target_link_libraries(qlever-cli cliUtils engine index parser util ${CMAKE_THREAD_LIBS_INIT} Boost::program_options compilationInfo global)
+qlever_target_link_libraries(qlever-cli cliUtils engine index rdfParser sparqlParser qlever_util ${CMAKE_THREAD_LIBS_INIT} Boost::program_options compilationInfo global)
 
 ###############################################################
 # CPack packaging
