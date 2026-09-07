@@ -18,6 +18,7 @@
 #include "global/ValueId.h"
 #include "index/vocabulary/GeoVocabulary.h"
 #include "index/vocabulary/VocabularyTypes.h"
+#include "rdfTypes/GeometryInfo.h"
 #include "util/BitUtils.h"
 #include "util/Exception.h"
 #include "util/HashSet.h"
@@ -129,7 +130,7 @@ class SplitVocabulary {
     AD_CORRECTNESS_CHECK(marker < numberOfVocabs &&
                          vocabIndex <= vocabIndexBitMask);
     return vocabIndex | (static_cast<uint64_t>(marker) << markerShift);
-  };
+  }
 
   // Extract the marker from a full 64 bit index.
   static constexpr uint8_t getMarker(uint64_t indexWithMarker) {
@@ -142,7 +143,7 @@ class SplitVocabulary {
   // which vocabulary this word would go)
   static uint8_t getMarkerForWord(const std::string_view& word) {
     return splitFunction_(word);
-  };
+  }
 
   // Helper to detect if a "special" vocabulary is used.
   static constexpr bool isSpecialVocabIndex(uint64_t indexWithMarker) {
@@ -153,7 +154,7 @@ class SplitVocabulary {
   // bits.
   static constexpr uint64_t getVocabIndex(uint64_t indexWithMarker) {
     return indexWithMarker & vocabIndexBitMask;
-  };
+  }
 
   // Close all underlying vocabularies.
   void close();
@@ -342,8 +343,7 @@ namespace detail::splitVocabulary {
 // vocabulary 0 except WKT literals, which go to vocabulary 1.
 struct GeoSplitFunc {
   uint8_t operator()(std::string_view word) const {
-    return ql::starts_with(word, "\"") &&
-           ql::ends_with(word, GEO_LITERAL_SUFFIX);
+    return ad_utility::isWktLiteral(word);
   }
 };
 
