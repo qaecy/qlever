@@ -7,10 +7,11 @@
 #ifndef QLEVER_SRC_INDEX_INDEXIMPL_H
 #define QLEVER_SRC_INDEX_INDEXIMPL_H
 
+#include <absl/strings/str_cat.h>
 #include <absl/time/time.h>
 #include <gtest/gtest_prod.h>
-#include <re2/re2.h>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,6 +38,7 @@
 #include "index/TextScoring.h"
 #include "index/VocabularyMerger.h"
 #include "index/vocabulary/EncodedIriManager.h"
+#include "index/vocabulary/SecondaryVocabulary.h"
 #include "index/vocabulary/Vocabulary.h"
 #include "parser/RdfParser.h"
 #include "parser/TripleComponent.h"
@@ -44,6 +46,9 @@
 #include "util/Forward.h"
 #include "util/Iterators.h"
 #include "util/MemorySize/MemorySize.h"
+#include "util/ProgressBar.h"
+#include "util/RegexSet.h"
+#include "util/TransparentFunctors.h"
 #include "util/json.h"
 
 template <typename Comparator, size_t I = NumColumnsIndexBuilding>
@@ -55,17 +60,6 @@ using FirstPermutation = SortBySPO;
 using FirstPermutationSorter = ExternalSorter<FirstPermutation>;
 using SecondPermutation = SortByOSP;
 using ThirdPermutation = SortByPSO;
-
-// Return type of `IndexImpl::buildPartialVocabularies`.
-struct BuildPartialVocabulariesResult {
-  using TripleVec =
-      ad_utility::CompressedExternalIdTable<NumColumnsIndexBuilding>;
-  // The i-th entry is the actual number of triples of the i-th batch, which
-  // belongs to the i-th partial vocabulary. It might be slightly different
-  // from the specified `batchSize` because of internally added triples.
-  std::vector<size_t> numTriplesPerPartialVocab_;
-  std::unique_ptr<TripleVec> idTriples_;
-};
 
 // Data produced after parsing: vocabulary metadata and unsorted ID triples.
 struct IndexBuilderDataAsExternalVector {
@@ -197,7 +191,7 @@ class IndexImpl {
   // Compiled regexes for IRIs that should be treated as blank nodes during
   // index building (only relevant during index building). Set (and compiled
   // from their string representation) via `setBlankNodeIriRegexes`.
-  std::vector<std::unique_ptr<re2::RE2>> blankNodeIriRegexes_;
+  ad_utility::RegexSet blankNodeIriRegexes_;
 
   // BlankNodeManager, initialized during `readConfiguration`
   std::unique_ptr<ad_utility::BlankNodeManager> blankNodeManager_{nullptr};
@@ -206,12 +200,18 @@ class IndexImpl {
 
   GraphNameManager graphNameManager_ = GraphNameManager();
 
+  // See `wasLoadedFromDisk()`.
+  bool wasLoadedFromDisk_ = false;
+
+  // The secondary vocabulary, see `secondaryVocab()`.
+  std::shared_ptr<const SecondaryVocabulary> secondaryVocab_;
+
   // The implementation of the `LocalVocabContext` interface for this index.
   // NOTE: `IndexImpl` deliberately does not implement that interface itself, so
   // that it doesn't become a polymorphic type. There must be exactly one of
   // these per index, see `LocalVocabContext.h`.
-  LocalVocabContextImpl localVocabContext_{&vocab_, &encodedIriManager_,
-                                           &blankNodeManager_};
+  LocalVocabContextImpl localVocabContext_{
+      &vocab_, &encodedIriManager_, &blankNodeManager_, &secondaryVocab_};
 
  public:
   explicit IndexImpl(ad_utility::AllocatorWithLimit<Id> allocator);
@@ -267,8 +267,37 @@ class IndexImpl {
   // Read necessary meta data into memory and opens file handles.
   void addTextFromOnDiskIndex();
 
-  const auto& getVocab() const { return vocab_; };
+  const auto& getVocab() const { return vocab_; }
+
+  // Whether this index was loaded from disk (see `createFromOnDiskIndex`), as
+  // opposed to merely being built. Used for the "was unloaded" message, see
+  // `Index::~Index()`.
+  bool wasLoadedFromDisk() const { return wasLoadedFromDisk_; }
   auto& getNonConstVocabForTesting() { return vocab_; }
+
+  // Return the secondary vocabulary of this index (see
+  // `index/vocabulary/SecondaryVocabulary.h`), or `nullptr` if it has none.
+  // Note that this member is immutable once the index has been loaded, because
+  // the `Id`s of a secondary vocabulary are only valid for the very vocabulary
+  // that they were created for.
+  //
+  // TODO<joka921> Nothing sets this yet, except for unit tests. It will be set
+  // when the index is read from disk, together with the persisted data that
+  // the words belong to; until then the only way to obtain a secondary
+  // vocabulary is `setSecondaryVocabForTesting`.
+  const SecondaryVocabulary* secondaryVocab() const {
+    return secondaryVocab_.get();
+  }
+
+  // Set the secondary vocabulary, see above. NOTE: Tests that need an index
+  // with a secondary vocabulary should not call this directly, but set
+  // `TestIndexConfig::secondaryVocabWords` (see
+  // `test/util/IndexTestHelpers.h`), such that the vocabulary is part of the
+  // index right from its creation.
+  void setSecondaryVocabForTesting(
+      std::shared_ptr<const SecondaryVocabulary> secondaryVocab) {
+    secondaryVocab_ = std::move(secondaryVocab);
+  }
 
   // Replace the currently loaded vocabulary with a zero-copy view directly
   // into `serializer`'s buffer. See `Vocabulary::loadFromZeroCopyDeserializer`
@@ -305,7 +334,7 @@ class IndexImpl {
 
   const ad_utility::AllocatorWithLimit<Id>& allocator() const {
     return allocator_;
-  };
+  }
 
   ad_utility::BlankNodeManager* getBlankNodeManager() const;
 
@@ -340,9 +369,8 @@ class IndexImpl {
   // full IRI and must therefore start with `<`; a regex that violates this or
   // is not a valid regular expression is reported with a user-readable
   // exception. See `TripleComponentWithIndex::isBlankNode`.
-  void setBlankNodeIriRegexes(
-      const std::vector<std::string>& blankNodeIriRegexes);
-  const std::vector<std::unique_ptr<re2::RE2>>& getBlankNodeIriRegexes() const {
+  void setBlankNodeIriRegexes(std::vector<std::string> blankNodeIriRegexes);
+  const ad_utility::RegexSet& getBlankNodeIriRegexes() const {
     return blankNodeIriRegexes_;
   }
 
@@ -413,7 +441,7 @@ class IndexImpl {
 
     // Returns true if the text block contains entries outside of the requested
     // range
-    bool hasToBeFiltered() const { return optIdRange_.has_value(); };
+    bool hasToBeFiltered() const { return optIdRange_.has_value(); }
 
     // The id range of the prefix or word used to retrieve the text block(s). It
     // is only set if computeHasToBeFiltered was determined to be true during
@@ -484,7 +512,7 @@ class IndexImpl {
 
   float getAverageNofEntityContexts() const {
     return textMeta_.getAverageNofEntityContexts();
-  };
+  }
 
   void setKbName(const std::string& name);
 
@@ -561,6 +589,13 @@ class IndexImpl {
   // build).
   std::string dateOfIndexBuild() const;
 
+  // The same as `dateOfIndexBuild` above, but for an index that is not
+  // loaded: `configurationJson` and `onDiskBase` are the configuration
+  // (`<onDiskBase>.meta-data.json`) and the base name of that index. This is
+  // useful for tooling that inspects an index on disk without loading it.
+  static std::string dateOfIndexBuild(const nlohmann::json& configurationJson,
+                                      const std::string& onDiskBase);
+
   // Format the given time as a UTC timestamp string in the
   // `DATE_OF_INDEX_BUILD_FORMAT` (e.g. `2026-07-12T14:03:52Z`).
   static std::string formatIndexBuildTime(absl::Time time);
@@ -601,58 +636,63 @@ class IndexImpl {
   IndexBuilderDataAsFirstPermutationSorter createIdTriplesAndVocab(
       std::shared_ptr<RdfParserBase> parser);
 
-  // Parse all triples from `parser` in batches of `linesPerPartial`, write one
-  // partial vocabulary file per batch, and return the accumulated ID triples
-  // together with per-batch size information. The memory used by the item
-  // allocator is freed when this function returns.
+  // Parse all triples from `parser` using `NUM_PARALLEL_ITEM_MAPS` worker
+  // threads that work completely independently of each other. Each of them
+  // processes batches of `linesPerPartial` triples, and for each batch writes
+  // one partial vocabulary file and stores the corresponding ID triples in its
+  // own file. The memory used by the item allocator is freed when this function
+  // returns.
   BuildPartialVocabulariesResult buildPartialVocabularies(
       std::shared_ptr<RdfParserBase> parser, size_t linesPerPartial);
+
+  // The work of a single worker thread spawned by `buildPartialVocabularies`:
+  // repeatedly get a batch of triples from `parser` (the parsers used for
+  // index building support concurrent calls to `getBatch`) and convert the
+  // strings in those triples to IDs using a hash map that is private to this
+  // worker. After `linesPerPartial` triples, write the resulting partial
+  // vocabulary and the corresponding triples. Both of them are private to
+  // this worker, so no synchronization with the other workers is needed.
+  BuildPartialVocabulariesResult::WorkerResult runPartialVocabularyWorker(
+      size_t linesPerPartial, RdfParserBase& parser, ItemAlloc itemAlloc,
+      std::atomic<size_t>* numHasWordTriples,
+      ad_utility::ConcurrentProgressBar& progressBar, size_t workerIdx);
 
   // ___________________________________________________________________
   IndexBuilderDataAsExternalVector passFileForVocabulary(
       std::shared_ptr<RdfParserBase> parser, size_t linesPerPartial);
 
-  // Create a task that writes a partial vocabulary given by `items` to disk and
-  // adds the corresponding triples in `localIds` to the provided
-  // `globalWritePtr`. This is used to write the partial vocabularies in
-  // parallel while we are still parsing the input file. `numLines` indicates
-  // how many lines from the KB we have already parsed (only for logging).
-  // `numFiles` indicates how many partial vocabularies we have seen before,
-  // which is the index of the vocabulary we are going to write.
-  // `actualCurrentPartialSize` indicates how many triples belong to this
-  // partition (including extra langfilter triples). The `globalWritePtr` is
-  // shared between all tasks and is protected by a mutex internally, so the
-  // tasks can safely add their triples to it while writing their partial
-  // vocabularies to disk.
-  absl::AnyInvocable<void()> createWritePartialVocabularyTask(
-      size_t numLines, size_t numFiles, size_t actualCurrentPartialSize,
-      ItemMapArray items,
+  // Write the partial vocabulary given by `items` to the file
+  // `onDiskBase_ + PARTIAL_VOCAB_WORDS_INFIX + filenameSuffix` and add the
+  // corresponding triples in `localIds` to `idTriples`. Both `items` and
+  // `idTriples` belong to a single worker thread, so no locking is required.
+  void writePartialVocabulary(
+      const std::string& filenameSuffix, ItemMapAndBuffer items,
       std::vector<std::array<Id, NumColumnsIndexBuilding>> localIds,
-      ad_utility::Synchronized<std::unique_ptr<TripleVec>>* globalWritePtr)
-      const;
+      TripleVec& idTriples) const;
 
-  // Return a Turtle parser that parses the given file. The parser will be
-  // configured to either parse in parallel or not, and to either use the
-  // CTRE-based relaxed parser or not, depending on the settings of the
-  // corresponding member variables.
+  // Return a Turtle parser that parses the given files. The parser will be
+  // configured to either parse in parallel or not (per input file), and to
+  // either use the CTRE-based relaxed parser or not (via the
+  // `ascii-prefixes-only` setting, see `onlyAsciiTurtlePrefixes_`).
   std::unique_ptr<RdfParserBase> makeRdfParser(
       ad_utility::InputRangeTypeErased<qlever::InputFileSpecification> files)
       const;
 
   template <typename Func>
   FirstPermutationSorterAndInternalTriplesAsPso convertPartialToGlobalIds(
-      TripleVec& data, const std::vector<size_t>& actualLinesPerPartial,
-      Func isQLeverInternalTriple);
+      BuildPartialVocabulariesResult& data, Func isQLeverInternalTriple);
 
   // Helper function to get the filename for a given permutation.
   std::string getFilenameForPermutation(const Permutation& permutation,
                                         bool internal) const;
 
   // Create a `CompressedRelationWriter` and a callback that adds the metadata
-  // of large relations to the `metaData` object.
+  // of large relations to the `metaData` object. If `numWriterThreads` is
+  // set, it overrides the number of compress/write threads of the writer
+  // (see the `CompressedRelationWriter` constructor).
   CompressedRelationWriter::WriterAndCallback getWriterAndCallback(
-      IndexMetaData& metaData, size_t numColumns,
-      const std::string& fileName) const;
+      IndexMetaData& metaData, size_t numColumns, const std::string& fileName,
+      std::optional<size_t> numWriterThreads = std::nullopt) const;
 
   // TODO<joka921> Get rid of the `numColumns` by including them into the
   // `sortedTriples` argument.
@@ -666,12 +706,14 @@ class IndexImpl {
   // columns in the relation (usually 4, sometimes 6 with patterns).
   // `fileName` is the base name of the files to write to (without suffixes).
   // `sortedTriples` is an input range that provides the triples in the correct
-  // order.
+  // order. If `numWriterThreads` is set, it overrides the number of
+  // compress/write threads (see `getWriterAndCallback`).
   // Return the number of triples written and the metadata for the written
   // permutation.
   std::tuple<size_t, IndexMetaData> createPermutationImpl(
       size_t numColumns, const std::string& fileName,
-      ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples);
+      ad_utility::InputRangeTypeErased<IdTableStatic<0>> sortedTriples,
+      std::optional<size_t> numWriterThreads = std::nullopt);
 
  protected:
   // _______________________________________________________________________
@@ -987,9 +1029,12 @@ class IndexImpl {
                             const IdTable& table);
 
   // Recompute the statistics about the index based on the passed located
-  // triples shared state.
+  // triples shared state. `progress` is called (possibly from several
+  // threads) with the number of newly scanned rows; this is used by the index
+  // rebuild for progress reporting and defaults to a no-op.
   nlohmann::json recomputeStatistics(
-      const LocatedTriplesSharedState& locatedTriplesSharedState) const;
+      const LocatedTriplesSharedState& locatedTriplesSharedState,
+      const std::function<void(size_t)>& progress = ad_utility::noop) const;
 };
 
 #endif  // QLEVER_SRC_INDEX_INDEXIMPL_H

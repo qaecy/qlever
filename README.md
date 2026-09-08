@@ -185,9 +185,21 @@ following rules:
    CMakeLists.txt
    - add_subdirectory(src/cli-utils) alongside the other add_subdirectory calls
    - add_executable(qlever-cli src/QleverCliMain.cpp) with
-     qlever_target_link_libraries(qlever-cli cliUtils engine index parser util
-     ${CMAKE_THREAD_LIBS_INIT} Boost::program_options compilationInfo global)
-     placed just before the CPack section
+     qlever_target_link_libraries(qlever-cli cliUtils engine index rdfParser
+     sparqlParser qlever_util ${CMAKE_THREAD_LIBS_INIT} Boost::program_options
+     compilationInfo global) placed just before the CPack section
+     NOTE: these target names drift. Upstream #3142 ("Untangle the `index` and
+     `parser` libraries") deleted the monolithic `parser` target, splitting it
+     into `basicParser`, `rdfParser` and `sparqlParser`, and renamed `util` to
+     `qlever_util`. A merge that renames a target does NOT conflict — the link
+     line still reads as valid text and only fails at CMake configure time with
+     "Cannot specify link libraries for target ... which is not built by this
+     project". If configure fails that way, list the real targets with
+     `grep -rh add_library src --include=CMakeLists.txt` and re-point the line.
+
+   src/cli-utils/CMakeLists.txt — `target_link_libraries(cliUtils PUBLIC ...)`
+   links `qlever_util` (NOT `util`) and `qlever`; `cliUtilsLight` links
+   `memorySize`. Same drift caveat as above.
 
    test/CMakeLists.txt
    - addLinkAndDiscoverTest(CliUtilsTest cliUtilsLight)
@@ -206,7 +218,9 @@ following rules:
         if (view.size() > 1 && view[1] == '<') {
           raise("Found RDF* syntax ('<<')...");
         }
-   b) In RdfStreamParser<T>::getLineImpl(), inside the
+   b) In RdfStreamParser<T>::getBatch() (called getLineImpl() before the
+      upstream merge that renamed it and made it return a whole batch),
+      inside the
       `if (byteVec_.size() > RDF_PARSER_MAX_TOTAL_BUFFER_SIZE().getBytes())`
       block, before the generic AD_LOG_ERROR, add:
         std::string_view unparsed = tok_.view();
@@ -283,9 +297,28 @@ following rules:
    - `qlever::QueryPlan` (a tuple) was unified into the `qlever::PlannedQuery`
      class in `libqlever/QleverTypes.h`; `MaterializedViewsManager::
      writeViewToDisk` takes the latter.
+   - `MaterializedViewsManager::loadView` and `getView` each take a trailing
+     `QueryExecutionContext*` (#2937), forwarded to `computeCacheKey` for
+     cache-key based query rewriting. Pass a real QEC from `createQec()`, not
+     `nullptr` — `nullptr` compiles but silently disables the rewriting, so the
+     view loads and is simply never used to answer a query.
 
-   After resolving, verify with the fast local flow in "Build and test" above —
-   it compiles and runs all 81 e2e tests in well under a minute once warm.
+   Resolving a conflict with `git checkout --theirs <file>` replaces the WHOLE
+   file, so it also discards any of our hunks in that file that merged cleanly.
+   After using it, re-check every patch the file is supposed to carry, not just
+   the one that conflicted.
+
+   After resolving, verify with the fast local flow in "Build and test" above.
+   Two e2e failures are expected on macOS and are NOT regressions:
+   - `performance.spec.ts` — exits 127 because `curl` is absent from the
+     e2e-runner image; it downloads a benchmark dataset from GCS.
+   - `extended-commands.spec.ts` "should clone an index" — Docker Desktop's
+     macOS bind mount does not support the syscall behind
+     `std::filesystem::copy_file`, which fails there with EPERM while ordinary
+     writes to the same directory succeed. Reproducible with a three-line
+     program and no QLever code involved; it passes on container-local storage,
+     so `clone` is fine on Linux.
+   Expect 75/86 e2e tests to pass on macOS.
 ```
 
 ## Other image variants

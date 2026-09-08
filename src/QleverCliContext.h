@@ -300,7 +300,13 @@ class QleverCliContext {
   // Load a previously written materialized view from disk into memory so that
   // it can be referenced in queries via the magic predicate or SERVICE syntax.
   void loadMaterializedView(const std::string& name) const {
-    materializedViewsManager_.loadView(name);
+    // Upstream #2937 gave `loadView` a `QueryExecutionContext*` parameter that
+    // is forwarded to `MaterializedView::computeCacheKey` for cache-key based
+    // query rewriting. Passing a real QEC (rather than `nullptr`, which skips
+    // that analysis) keeps the loaded view eligible for rewriting, matching
+    // what the server does.
+    auto qec = createQec();
+    materializedViewsManager_.loadView(name, qec.get());
   }
 
   static void validateConfig(const IndexBuilderConfig& config) {

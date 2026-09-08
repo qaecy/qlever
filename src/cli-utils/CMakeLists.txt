@@ -10,7 +10,7 @@ add_library(cliUtils
 
 target_link_libraries(cliUtils
     PUBLIC
-        util
+        qlever_util
         qlever
         ${ZLIB_LIBRARIES}
 )

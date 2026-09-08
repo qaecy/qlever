@@ -66,9 +66,6 @@ option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 if(BUILD_SHARED_LIBS)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     add_compile_options(-fPIC -fno-semantic-interposition)
-    # Let the code detect that it is compiled into shared libraries, see
-    # `AD_ALWAYS_INLINE` in `CompilerExtensions.h` for the only current use.
-    add_compile_definitions(QLEVER_BUILD_SHARED_LIBRARIES)
 endif()
 
 # Link QLever's shared libraries with `--no-undefined`, such that a library that
@@ -149,6 +146,24 @@ endif()
 option(EXPRESSION_GENERATOR_BACKPORTS_FOR_CPP17 "Use the C++17 backports inside `SparqlExpressionGenerators.h`. They are currently less efficient than the C++20 implementations. This option is implicitly activated by the `REDUCED_FEATURE_SET_FOR_CPP17` option, but can be activated separately to run the unit tests for the backports of the `ExpressionGenerators`" OFF)
 if (EXPRESSION_GENERATOR_BACKPORTS_FOR_CPP17)
     add_compile_definitions(QLEVER_EXPRESSION_GENERATOR_BACKPORTS_FOR_CPP17)
+endif()
+
+# Select the memory-allocator backend that `qlever::Allocator` resolves to
+# (see `src/util/Allocator.h`):
+#   * `limit` (default): the historical `ad_utility::AllocatorWithLimit`.
+#   * `pmr`: a `std::pmr::memory_resource`-based allocator that keeps the same
+#     memory-limit semantics by default.
+# The `pmr` value is what allows building and running the same test suite
+# against the polymorphic allocator for validation.
+set(QLEVER_ALLOCATOR_BACKEND "limit" CACHE STRING "Allocator backend: limit or pmr")
+set_property(CACHE QLEVER_ALLOCATOR_BACKEND PROPERTY STRINGS "limit" "pmr")
+if (QLEVER_ALLOCATOR_BACKEND STREQUAL "pmr")
+    message(STATUS "QLever allocator backend: pmr (std::pmr::memory_resource)")
+    add_compile_definitions(QLEVER_USE_PMR_ALLOCATOR)
+elseif (QLEVER_ALLOCATOR_BACKEND STREQUAL "limit")
+    message(STATUS "QLever allocator backend: limit (AllocatorWithLimit)")
+else()
+    message(FATAL_ERROR "QLEVER_ALLOCATOR_BACKEND must be 'limit' or 'pmr', got '${QLEVER_ALLOCATOR_BACKEND}'")
 endif()
 
 set(RANGE_V3_REQUIRED_BY_COMPILER OFF)
@@ -307,7 +322,7 @@ FetchContent_Declare(
 FetchContent_Declare(
         spatialjoin
         GIT_REPOSITORY https://github.com/ad-freiburg/spatialjoin
-        GIT_TAG 344a3fa41e96db38ac775cc78224847255d0152f
+        GIT_TAG e7f5fda0d25729bec6c84f129095f4892c41d351
         SYSTEM
         EXCLUDE_FROM_ALL
 )
@@ -485,6 +500,32 @@ endif ()
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${ADDITIONAL_LINKER_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${ADDITIONAL_LINKER_FLAGS}")
 
+# The `mold` linker (2.30, as shipped by Ubuntu 24.04, up to 2.42, the current
+# release) indexes zero-length FDEs in `.eh_frame_hdr`, which makes the runtime
+# unwinder miss the unwind information of whatever function shares their
+# address: an exception thrown there terminates the process instead of being
+# caught, and in a coroutine even the implicit `catch (...)` around the body
+# never runs. GCC produces those zero-length FDEs for the empty cold partitions
+# of `-freorder-blocks-and-partition` (on by default from `-O2`), so turning the
+# partitioning off leaves mold nothing to mis-index. GNU ld and gold are not
+# affected. See https://github.com/rui314/mold/issues/1648. Observed as an abort
+# in `MaterializedViewsTest`s `serverIntegration` in the Release Docker build.
+#
+# Ask the compiler driver which linker it would actually use, so that a
+# `-fuse-ld=mold` arriving through any of the flag variables above is caught.
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    separate_arguments(QLEVER_LINKER_PROBE_FLAGS NATIVE_COMMAND
+            "${CMAKE_CXX_FLAGS} ${CMAKE_EXE_LINKER_FLAGS}")
+    execute_process(
+            COMMAND ${CMAKE_CXX_COMPILER} ${QLEVER_LINKER_PROBE_FLAGS} -Wl,--version
+            OUTPUT_VARIABLE QLEVER_LINKER_VERSION
+            ERROR_VARIABLE QLEVER_LINKER_VERSION)
+    if (QLEVER_LINKER_VERSION MATCHES "mold")
+        message(STATUS "Linking with mold, whose .eh_frame_hdr breaks unwinding through GCC's cold partitions; adding -fno-reorder-blocks-and-partition")
+        add_compile_options(-fno-reorder-blocks-and-partition)
+    endif ()
+endif ()
+
 
 if (${PERFTOOLS_PROFILER})
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -lprofiler")
@@ -655,6 +696,13 @@ FetchContent_Declare(
 # See https://github.com/google/googletest/issues/5015
 if (EMSCRIPTEN)
     add_compile_definitions(GTEST_HAS_PTHREAD=1)
+
+    # With Emscripten, the DWARF debug info that `-g` puts into the object
+    # files (which is all that CMake's `Debug`/`RelWithDebInfo` flags do) only
+    # ends up in the final `.wasm` when `-g` is ALSO passed at link time.
+    # Add it, so that debug build types produce binaries that can be debugged
+    # and profiled with source information in the browser dev tools.
+    add_link_options("$<$<CONFIG:Debug,RelWithDebInfo>:-g>")
 endif ()
 FetchContent_MakeAvailable(googletest ctre abseil fsst nlohmann-json antlr range-v3 spatialjoin uriparser opentelemetry-cpp s2 re2)
 
@@ -732,6 +780,16 @@ set(LOGLEVEL DEBUG CACHE STRING
 set_property(CACHE LOGLEVEL PROPERTY STRINGS FATAL ERROR WARN INFO DEBUG TIMING TRACE)
 add_compile_definitions(LOGLEVEL=${LOG_LEVEL_${LOGLEVEL}})
 
+# The `AD_LOG_...` macros have two implementations, see `src/util/Log.h`. By
+# default, the branching logger is used, which doesn't evaluate the arguments of
+# a suppressed log message, but introduces a branch at every call site. The
+# branchless logger always evaluates its arguments, but is friendlier to
+# coverage measurements, because the branch lives in `Log.h` instead of in each
+# of the hundreds of call sites. It is used for the coverage build.
+option(BRANCHLESS_LOGGING "Use the coverage-friendly branchless implementation of the `AD_LOG_...` macros" OFF)
+if (BRANCHLESS_LOGGING)
+    add_compile_definitions(QLEVER_BRANCHLESS_LOGGING)
+endif ()
 
 ##################################################
 # Warnings about incorrect combination of CMake variables
@@ -793,7 +851,7 @@ set(PRECOMPILED_HEADER_FILES_SPARQL_EXPRESSIONS
    ${PRECOMPILED_HEADER_FILES_WITH_BEAST})
 
 if (USE_PRECOMPILED_HEADERS)
-    target_precompile_headers(parser PRIVATE ${PRECOMPILED_HEADER_FILES_PARSER})
+    target_precompile_headers(sparqlParser PRIVATE ${PRECOMPILED_HEADER_FILES_PARSER})
     target_precompile_headers(engine PRIVATE ${PRECOMPILED_HEADER_FILES_ENGINE})
     target_precompile_headers(sparqlExpressions PRIVATE ${PRECOMPILED_HEADER_FILES_SPARQL_EXPRESSIONS})
     # Note: index TUs that include `Operation.h` transitively pull in `beast.h`
@@ -830,13 +888,16 @@ if (NOT _EMSCRIPTEN_NO_INDEXBUILDER_AND_SERVER)
     if (USE_PRECOMPILED_HEADERS)
         target_precompile_headers(qlever-server REUSE_FROM engine)
     endif()
+
+    add_executable(qlever-upgrade-index src/IndexUpgraderMain.cpp)
+    qlever_target_link_libraries(qlever-upgrade-index index ${CMAKE_THREAD_LIBS_INIT} Boost::program_options compilationInfo global)
 endif()
 
 add_executable(LibQLeverExample src/libqlever/LibQLeverExample.cpp)
-qlever_target_link_libraries(LibQLeverExample parser engine qlever_util index qlever)
+qlever_target_link_libraries(LibQLeverExample sparqlParser engine qlever_util index qlever)
 
 add_executable(VocabularyMergerMain src/VocabularyMergerMain.cpp)
-qlever_target_link_libraries(VocabularyMergerMain index parser ${CMAKE_THREAD_LIBS_INIT})
+qlever_target_link_libraries(VocabularyMergerMain index sparqlParser ${CMAKE_THREAD_LIBS_INIT})
 
 add_executable(PrintIndexVersionMain src/PrintIndexVersionMain.cpp)
 qlever_target_link_libraries(PrintIndexVersionMain qlever_util)
@@ -845,12 +906,13 @@ if (NOT _EMSCRIPTEN_NO_INDEXBUILDER_AND_SERVER)
     install(TARGETS
         qlever-index
         qlever-server
+        qlever-upgrade-index
         RUNTIME DESTINATION bin
     )
 endif()
 
 add_executable(qlever-cli src/QleverCliMain.cpp)
-qlever_target_link_libraries(qlever-cli cliUtils engine index parser util ${CMAKE_THREAD_LIBS_INIT} Boost::program_options compilationInfo global)
+qlever_target_link_libraries(qlever-cli cliUtils engine index rdfParser sparqlParser qlever_util ${CMAKE_THREAD_LIBS_INIT} Boost::program_options compilationInfo global)
 
 ###############################################################
 # CPack packaging
@@ -929,6 +991,7 @@ set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/ad-freiburg/qlever")
 
 set(CPACK_OUTPUT_FILE_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/packages")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_STRIP_FILES YES)
 
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 
