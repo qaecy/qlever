@@ -53,8 +53,10 @@ sourcelist
 # Alpine build directory
 build-alpine/
 
-# Ubuntu build directory (docker-compose.cli-alpine.yml's `builder-ubuntu`)
+# Ubuntu build directories (docker-compose.cli-alpine.yml's `builder-ubuntu`
+# and `builder-ubuntu-amd64`)
 build-ubuntu/
+build-ubuntu-amd64/
 
 # CLI e2e test database
 e2e-cli/test-db-extended/
