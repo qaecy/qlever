@@ -92,6 +92,40 @@ services:
           -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" ..
         ninja -j$$JOBS qlever-cli qlever-index CliUtilsTest CliUtilsRdfTest
 
+  # Same incremental Ubuntu build, but for linux/amd64 — the architecture a
+  # deployment build embeds (`qlever-cli_ubuntu-x86_64-*`, see qaecy-monorepo
+  # apps/databases/cue/Dockerfile's QLEVER_CLI_ARCH). On Apple Silicon this
+  # compiles under emulation and is far slower than `builder-ubuntu`; use that
+  # one for development and this only when a deployable binary is needed.
+  #
+  # A service rather than an ad-hoc `docker run`, for the same reason
+  # `builder-amd64` is one: otherwise the only record of how the shipped binary
+  # was refreshed lives in someone's shell history. Writes to its own build
+  # directory so it never invalidates the native build's cache.
+  #
+  # Toolchain image (once):
+  #   docker build --platform linux/amd64 --target deps \
+  #     -t qlever-builder:ubuntu-amd64 -f Dockerfiles/Dockerfile.cli-only.ubuntu .
+  builder-ubuntu-amd64:
+    image: qlever-builder:ubuntu-amd64
+    platform: linux/amd64
+    volumes:
+      - .:/qlever
+      - ./build-ubuntu-amd64:/qlever/build
+    working_dir: /qlever/build
+    user: root
+    environment:
+      - BUILD_JOBS=${BUILD_JOBS:-0}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ "$$BUILD_JOBS" = "0" ]; then JOBS=$$(nproc); else JOBS=$$BUILD_JOBS; fi
+        cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO \
+          -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" ..
+        ninja -j$$JOBS qlever-cli qlever-index CliUtilsTest CliUtilsRdfTest
+
   # Packages the locally-built binaries into a slim Alpine runtime image
   # tagged as qlever-cli:alpine-test (used by the e2e test suite).
   # Run after 'builder' has produced ./build-alpine/qlever-cli.
