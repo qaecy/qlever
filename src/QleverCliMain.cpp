@@ -27,6 +27,7 @@
 #include "engine/ExecuteUpdate.h"
 #include "engine/QueryPlanner.h"
 #include "index/DeltaTriples.h"
+#include "index/IndexFormatConverter.h"
 #include "index/InputFileSpecification.h"
 #include "index/LocalVocab.h"
 #include "index/TripleComponentConversions.h"
@@ -208,6 +209,13 @@ void printUsage(const char* programName, std::ostream& out = std::cerr) {
          "writes to a temp basename,\n";
   out << "                 replaces the original index files atomically, and "
          "clears <index_basename>.update-triples.\n";
+  out << "  upgrade-index <index_basename>                Upgrade an index "
+         "from the previous on-disk index format to the current one, in "
+         "place\n";
+  out << "                 Run binary-rebuild with the OLD binary first: an "
+         "index with pending\n";
+  out << "                 delta triples is refused, because those are "
+         "written in the old format.\n";
   out << "  build-index <json_input>                      Build index "
          "from RDF files\n";
   out << "  serialize   <index_basename> <format> [output_file]  Dump "
@@ -690,6 +698,59 @@ int executeBinaryRebuild(const std::string& indexBasename,
   } catch (const std::exception& e) {
     json errorResponse = createErrorResponse(e.what());
     errorResponse["command"] = "binary-rebuild";
+    errorResponse["indexBasename"] = indexBasename;
+    std::cerr << errorResponse.dump() << std::endl;
+    flushAndExit(1);
+  }
+}
+
+// Upgrade an index from the previous on-disk index format to the current one,
+// in place. This is exactly what the standalone `qlever-upgrade-index`
+// executable does (`src/IndexUpgraderMain.cpp`) — the conversion itself lives
+// in `index/IndexFormatConverter.h` and is shared, not duplicated here.
+//
+// Why expose it on the CLI at all: a deployment that embeds only `qlever-cli`
+// (which is what QAECY's `databases-cue` image does) otherwise has no way to
+// move an index across the one index-format change QLever ships a converter
+// for. Its only remaining option is a full rebuild from the input files, which
+// such a deployment may no longer have — the index IS the system of record
+// there. `qlever-cli` already links the `index` library the converter is part
+// of, so this costs nothing but the dispatch.
+//
+// Two preconditions, both enforced by the converter and both worth knowing
+// before you call this:
+//
+//   1. The index must be in the PREVIOUS format. An index already in the
+//      current format is refused rather than silently no-op'd.
+//   2. It must have no persisted updates. Delta triples are stored in terms of
+//      the old format's `Id`s, so they have to be materialized first — run
+//      `binary-rebuild` with the OLD binary, then upgrade with the new one.
+//
+// The upgrade is staged in a subdirectory and only swapped into place after
+// the upgraded index has been loaded and checked, so a failure anywhere leaves
+// the original index untouched.
+int executeUpgradeIndex(const std::string& indexBasename) {
+  try {
+    // Exclusive for the same reason `binary-rebuild` is: this replaces every
+    // index file at this base name, so no other command may be reading them --
+    // or writing `.update-triples` -- while it happens.
+    IndexCLILock lock(indexBasename, IndexCLILock::Mode::Exclusive);
+
+    qlever::indexFormatConverter::upgradeIndexInPlace(indexBasename);
+
+    json response;
+    response["success"] = true;
+    response["message"] = "Index upgraded to the current index format.";
+    response["indexBasename"] = indexBasename;
+    response["timestamp"] =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    std::cout << response.dump() << std::endl;
+    flushAndExit(0);
+  } catch (const std::exception& e) {
+    json errorResponse = createErrorResponse(e.what());
+    errorResponse["command"] = "upgrade-index";
     errorResponse["indexBasename"] = indexBasename;
     std::cerr << errorResponse.dump() << std::endl;
     flushAndExit(1);
@@ -1202,6 +1263,9 @@ int main(int argc, char* argv[]) {
       // atomic in-place rebuild (temp name → swap → clear update-triples).
       std::string outputBasename = (nargs == 4) ? args[3] : "";
       return executeBinaryRebuild(args[2], outputBasename, memLimit);
+    } else if (command == "upgrade-index" && nargs == 3) {
+      // upgrade-index <index_basename>
+      return executeUpgradeIndex(args[2]);
     } else if (command == "serialize" && (nargs == 4 || nargs == 5)) {
       std::string outputFile = (nargs == 5) ? args[4] : "";
       return serializeDatabase(args[2], args[3], memLimit, outputFile);

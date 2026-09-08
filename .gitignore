@@ -53,6 +53,9 @@ sourcelist
 # Alpine build directory
 build-alpine/
 
+# Ubuntu build directory (docker-compose.cli-alpine.yml's `builder-ubuntu`)
+build-ubuntu/
+
 # CLI e2e test database
 e2e-cli/test-db-extended/
 e2e-cli/test-db-stdin/
