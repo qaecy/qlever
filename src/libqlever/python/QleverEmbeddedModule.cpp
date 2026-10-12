@@ -42,7 +42,7 @@ NB_MODULE(qlever_embedded, m) {
   nb::exception<ad_utility::CancellationException>(m, "QueryTimeout",
                                                    PyExc_TimeoutError);
 
-  nb::class_<EmbeddedEngine>(m, "Engine")
+  nb::class_<EmbeddedEngine>(m, "Engine", nb::is_weak_referenceable())
       .def(nb::init<std::string, double, bool>(), "base_name"_a,
            "memory_gb"_a = 4.0, "persist_updates"_a = true,
            nb::call_guard<nb::gil_scoped_release>(),
