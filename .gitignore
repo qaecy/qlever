@@ -17,6 +17,8 @@ e2e_data/*
 
 # Compiled Dynamic libraries
 *.so
+# ...except the vendored Python modules beside the vendored qlever-cli binaries.
+!/qlever_embedded_ubuntu-*.so
 *.dylib
 *.dll
 

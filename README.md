@@ -152,6 +152,26 @@ HTTP layer, where it can be reported properly.
 `-` never collides with the `write`/`delete` stdin convention: those read RDF from
 stdin and take no query, while `query`/`update` take a query and read no data.
 
+## Embedded in Python (`qlever_embedded`)
+
+`src/libqlever/python/` builds a Python 3.12 module that holds an index open inside the host process, for a service that would otherwise spawn `qlever-cli` per call and replay `.update-triples` every time. It wraps `libqlever`'s thread-safe `Qlever` class (the one the server uses), not the CLI's single-threaded context:
+
+- `Engine(base_name, memory_gb=4.0, persist_updates=True)` opens the index and replays its update layer once.
+- `query(sparql, format, sink)` streams the result to `sink(bytes)` in ~1 MB chunks (`sparql-json`, `csv`, `tsv`; `nt`, `nq` for CONSTRUCT). Each query runs on a snapshot, so it never waits for a write or a rebuild.
+- `update(sparql)` and `write_file(path, format="nq", graph="", delete=False)` are serialized and atomic (one `DeltaTriplesManager::modify` each), persisted once.
+- `rebuild(keep_previous="none")` builds a new index from a snapshot into `rebuild.<datetime>.tmp` beside the current one, while queries and writes continue, then swaps it in; writes made meantime are carried over.
+- `counts()`, `write_view(name, sparql)`, `load_view(name)`.
+
+Calls release the GIL; C++ exceptions arrive as `ValueError`/`RuntimeError`. QLever links jemalloc, which cannot be loaded into a running process, so the host must preload it: `LD_PRELOAD=/usr/lib/<arch>-linux-gnu/libjemalloc.so.2`.
+
+Both `builder-ubuntu` services build it (`-DQLEVER_PYTHON_BINDINGS=ON`, which needs `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`) as `build-ubuntu*/lib/qlever_embedded.cpython-312-<arch>-linux-gnu.so`; it is vendored at the repo root as `qlever_embedded_ubuntu-<arch>-<version>.so` beside the `qlever-cli` binaries, and installed by the consumer under its import name. Tests and a CLI-versus-embedded benchmark:
+
+```bash
+docker compose -f docker-compose.cli-alpine.yml run --rm -w /qlever \
+  -e QLEVER_BUILD=/qlever/build -e LD_PRELOAD=/lib/aarch64-linux-gnu/libjemalloc.so.2 \
+  builder-ubuntu sh -c 'cp build/lib/qlever_embedded*.so build/ && python3 -m pytest -q test/python'
+```
+
 ## Troubleshooting the test flows
 
 **`rm: can't remove '.../test-db-extended': Directory not empty`** — macOS writes a `.DS_Store` into the bind-mounted test directory in between `rm` unlinking the children and calling `rmdir()`. The `beforeAll` in `e2e-cli/extended-commands.spec.ts` retries the removal to absorb this; if it still bites, close the folder in Finder or run `find e2e-cli -name .DS_Store -delete` first.
