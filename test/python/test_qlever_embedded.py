@@ -137,3 +137,14 @@ def test_a_query_past_its_deadline_raises_and_the_engine_keeps_serving(index):
     chunks = []
     engine.query("SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }", "sparql-json", chunks.append, 10_000)
     assert json.loads(b"".join(chunks))["results"]["bindings"][0]["n"]["value"] == "1000"
+
+
+def test_an_engine_can_be_weakly_referenced(index):
+    import gc
+    import weakref
+    engine = qlever_embedded.Engine(index, 1.0)
+    ref = weakref.ref(engine)
+    assert ref() is engine
+    del engine
+    gc.collect()
+    assert ref() is None
