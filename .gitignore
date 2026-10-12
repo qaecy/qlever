@@ -88,3 +88,4 @@ e2e-cli/test-db-atomicity/
 
 # amd64 (release-parity) incremental build directory
 build-alpine-amd64/
+__pycache__/
