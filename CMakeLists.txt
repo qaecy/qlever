@@ -637,7 +637,9 @@ FetchContent_Declare(
         re2
         GIT_REPOSITORY https://github.com/google/re2.git
         GIT_TAG 972a15cedd008d846f1a39b2e88ce48d7f166cbd  # main branch from January 23 2026
-        GIT_SHALLOW TRUE
+        # Not shallow: a shallow fetch only finds a commit that is a branch tip,
+        # and this one no longer is.
+        GIT_SHALLOW FALSE
         OVERRIDE_FIND_PACKAGE
         SYSTEM
         EXCLUDE_FROM_ALL

@@ -51,3 +51,8 @@ if (EMSCRIPTEN)
             "SHELL:--emit-tsd qlever.d.ts"
     )
 endif ()
+
+option(QLEVER_PYTHON_BINDINGS "Build the qlever_embedded Python module" OFF)
+if (QLEVER_PYTHON_BINDINGS)
+    add_subdirectory(python)
+endif ()
