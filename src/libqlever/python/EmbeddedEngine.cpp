@@ -5,7 +5,10 @@
 
 #include "libqlever/python/EmbeddedEngine.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -26,6 +29,7 @@
 #include "util/MemorySize/MemorySize.h"
 #include "util/Timer.h"
 #include "util/http/MediaTypes.h"
+#include "util/jthread.h"
 
 namespace qlever::embedded {
 
@@ -45,6 +49,41 @@ EngineConfig makeConfig(const std::string& baseName, double memoryLimitGb,
 bool isGraphQuery(const std::string& type) {
   return type == "CONSTRUCT" || type == "DESCRIBE";
 }
+
+// Cancels `handle` with `TIMEOUT` once `limit` has passed, unless destroyed
+// first. Operations check the handle as they go, so a query stops within one
+// check window of its deadline and throws `CancellationException`.
+class Deadline {
+ public:
+  Deadline(std::weak_ptr<ad_utility::CancellationHandle<>> handle,
+           std::chrono::milliseconds limit)
+      : thread_{[this, handle = std::move(handle), limit]() {
+          std::unique_lock lock{mutex_};
+          if (!finished_.wait_for(lock, limit, [this] { return done_; })) {
+            if (auto pointer = handle.lock()) {
+              pointer->cancel(ad_utility::CancellationState::TIMEOUT);
+            }
+          }
+        }} {}
+
+  ~Deadline() {
+    {
+      std::lock_guard lock{mutex_};
+      done_ = true;
+    }
+    finished_.notify_one();
+  }
+
+  Deadline(const Deadline&) = delete;
+  Deadline& operator=(const Deadline&) = delete;
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable finished_;
+  bool done_ = false;
+  // Last, so it starts after the members it uses and is joined before they go.
+  ad_utility::JThread thread_;
+};
 
 // The format `qlever-cli query` would pick, validated against the query type.
 std::string resolveFormat(const std::string& type, std::string format) {
@@ -99,20 +138,29 @@ EmbeddedEngine::EmbeddedEngine(std::string baseName, double memoryLimitGb,
 
 // _____________________________________________________________________________
 void EmbeddedEngine::query(std::string sparql, std::string format,
-                           const Sink& sink) const {
+                           const Sink& sink,
+                           std::chrono::milliseconds timeout) const {
   auto type = cli_utils::detectQueryType(sparql);
   format = resolveFormat(type, std::move(format));
-  // Planned against a snapshot of the index and its delta triples, which the
-  // `PlannedQuery` keeps alive until the export below has finished.
-  auto planned = qlever_.parseAndPlanQuery(std::move(sparql));
-  const auto& handle =
-      planned.queryExecutionTree().getRootOperation()->getCancellationHandle();
+  auto handle = std::make_shared<ad_utility::CancellationHandle<>>();
+  std::optional<Deadline> deadline;
+  std::optional<std::chrono::milliseconds> timeLimit;
+  if (timeout.count() > 0) {
+    deadline.emplace(handle, timeout);
+    timeLimit = timeout;
+  }
   ad_utility::Timer timer{ad_utility::Timer::Started};
+  // Planned against a snapshot of the index and its delta triples, which the
+  // `PlannedQuery` keeps alive until the export below has finished. The time
+  // limit covers what the handle can not interrupt, such as sorting.
+  auto planned =
+      qlever_.parseAndPlanQuery(std::move(sparql), {}, handle, timeLimit);
   auto chunks = ExportQueryExecutionTrees::computeResult(
       planned.parsedQuery(), planned.queryExecutionTree(), mediaTypeOf(format),
       timer, handle);
   if (format != "nq") {
     for (const auto& chunk : chunks) {
+      handle->throwIfCancelled();
       sink(chunk);
     }
     return;
@@ -126,6 +174,7 @@ void EmbeddedEngine::query(std::string sparql, std::string format,
     }
   }};
   for (const auto& chunk : chunks) {
+    handle->throwIfCancelled();
     lines.feed(chunk);
     if (!pending.empty()) {
       sink(pending);
