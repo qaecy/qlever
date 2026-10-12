@@ -13,7 +13,7 @@ import threading
 import time
 
 BUILD = os.environ.get("QLEVER_BUILD", "build")
-sys.path.insert(0, BUILD)
+sys.path.insert(0, os.path.join(BUILD, "lib"))
 import qlever_embedded  # noqa: E402
 
 EX = "http://example.org/"

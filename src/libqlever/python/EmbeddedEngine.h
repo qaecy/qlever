@@ -6,6 +6,7 @@
 #ifndef QLEVER_SRC_LIBQLEVER_PYTHON_EMBEDDEDENGINE_H
 #define QLEVER_SRC_LIBQLEVER_PYTHON_EMBEDDEDENGINE_H
 
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -43,8 +44,11 @@ class EmbeddedEngine {
 
   // Formats: `sparql-json`, `csv`, `tsv` (SELECT/ASK) and `nt`, `nq`
   // (CONSTRUCT/DESCRIBE). An empty format picks `sparql-json` or `nt` by the
-  // query type, as `qlever-cli query` does.
-  void query(std::string sparql, std::string format, const Sink& sink) const;
+  // query type, as `qlever-cli query` does. A positive `timeout` cancels the
+  // query once it has passed, planning and export included, by throwing
+  // `ad_utility::CancellationException`; zero means no limit.
+  void query(std::string sparql, std::string format, const Sink& sink,
+             std::chrono::milliseconds timeout = {}) const;
 
   // A SPARQL UPDATE, possibly several operations separated by `;`, applied
   // atomically. Returns the delta triple counts before and after.

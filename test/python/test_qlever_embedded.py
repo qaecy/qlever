@@ -13,7 +13,7 @@ import time
 import pytest
 
 BUILD = os.environ.get("QLEVER_BUILD", "build")
-sys.path.insert(0, BUILD)
+sys.path.insert(0, os.path.join(BUILD, "lib"))
 import qlever_embedded  # noqa: E402
 
 EX = "http://example.org/"
@@ -125,3 +125,15 @@ def test_an_exception_in_the_sink_stops_the_query(index):
     with pytest.raises(KeyError):
         engine.query("SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }", "tsv", sink)
     assert count(engine) == 1000
+
+
+def test_a_query_past_its_deadline_raises_and_the_engine_keeps_serving(index):
+    engine = qlever_embedded.Engine(index, 4.0)
+    slow = "SELECT ?a ?d WHERE { GRAPH ?g { ?a ?b ?c . ?d ?e ?f } } ORDER BY DESC(CONCAT(STR(?a), STR(?d), STR(?c), STR(?f)))"
+    started = time.monotonic()
+    with pytest.raises(qlever_embedded.QueryTimeout) as raised:
+        engine.query(slow, "sparql-json", lambda chunk: None, 50)
+    assert isinstance(raised.value, TimeoutError) and time.monotonic() - started < 5
+    chunks = []
+    engine.query("SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }", "sparql-json", chunks.append, 10_000)
+    assert json.loads(b"".join(chunks))["results"]["bindings"][0]["n"]["value"] == "1000"

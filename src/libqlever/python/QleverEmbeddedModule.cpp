@@ -6,11 +6,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
 
 #include "libqlever/python/EmbeddedEngine.h"
+#include "util/CancellationHandle.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -31,10 +33,14 @@ nb::object asPython(const std::string& json) {
 // Every call that does work releases the GIL, so queries on other threads run
 // in parallel with it; a query re-acquires the GIL only to hand each result
 // chunk (about 1 MB) to the caller's `sink`. A C++ exception becomes a Python
-// exception (`ValueError` for an invalid argument, `RuntimeError` otherwise);
+// exception (`ValueError` for an invalid argument, `QueryTimeout`, a
+// `TimeoutError`, for a query past its deadline, `RuntimeError` otherwise);
 // an exception raised by `sink` stops the query and propagates unchanged.
 NB_MODULE(qlever_embedded, m) {
   m.doc() = "QLever, embedded: one open index per Engine, many readers, one writer";
+
+  nb::exception<ad_utility::CancellationException>(m, "QueryTimeout",
+                                                   PyExc_TimeoutError);
 
   nb::class_<EmbeddedEngine>(m, "Engine")
       .def(nb::init<std::string, double, bool>(), "base_name"_a,
@@ -44,16 +50,18 @@ NB_MODULE(qlever_embedded, m) {
       .def(
           "query",
           [](const EmbeddedEngine& engine, std::string sparql,
-             std::string format, nb::callable sink) {
+             std::string format, nb::callable sink, long long timeout_ms) {
             nb::gil_scoped_release released;
             engine.query(std::move(sparql), std::move(format),
                          [&sink](std::string_view chunk) {
                            nb::gil_scoped_acquire acquired;
                            sink(nb::bytes(chunk.data(), chunk.size()));
-                         });
+                         },
+                         std::chrono::milliseconds{timeout_ms});
           },
-          "sparql"_a, "format"_a = "", "sink"_a,
-          "Run a query, passing the serialized result to sink(bytes) in order.")
+          "sparql"_a, "format"_a = "", "sink"_a, "timeout_ms"_a = 0,
+          "Run a query, passing the serialized result to sink(bytes) in order. "
+          "With timeout_ms > 0 it raises QueryTimeout once that has passed.")
       .def(
           "update",
           [](EmbeddedEngine& engine, std::string sparql) {
