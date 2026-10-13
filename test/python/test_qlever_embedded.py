@@ -161,3 +161,35 @@ def test_a_values_clause_of_literals_parses(index):
     engine = qlever_embedded.Engine(index)
     result = json.loads(run(engine, f'SELECT ?s WHERE {{ VALUES ?v {{ "a" "b" ".pdf" }} ?s <{EX}p> <{EX}o1> }}'))
     assert [b["s"]["value"] for b in result["results"]["bindings"]] == [f"{EX}s1"] * 3
+
+
+def test_readers_see_only_committed_states_while_writes_and_a_rebuild_go_on(index, tmp_path):
+    engine = qlever_embedded.Engine(index)
+    batch, batches = 500, 12
+    committed, seen, errors, done = {0}, [], [], threading.Event()
+    count = f"SELECT (COUNT(*) AS ?n) WHERE {{ ?s <{EX}q> ?o }}"
+
+    def reader():
+        while not done.is_set():
+            try:
+                seen.append(int(json.loads(run(engine, count))["results"]["bindings"][0]["n"]["value"]))
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+    def writer():
+        for b in range(batches):
+            path = tmp_path / f"w{b}.nq"
+            path.write_text("".join(f"<{EX}w{b}_{i}> <{EX}q> <{EX}o{i}> <{GRAPH}> .\n" for i in range(batch)))
+            engine.write_file(str(path), "nq")
+            committed.add((b + 1) * batch)
+
+    readers = [threading.Thread(target=reader) for _ in range(4)]
+    writing = threading.Thread(target=writer)
+    [t.start() for t in readers]
+    writing.start()
+    engine.rebuild("none")
+    writing.join()
+    done.set()
+    [t.join() for t in readers]
+    assert not errors and set(seen) <= committed
+    assert json.loads(run(engine, count))["results"]["bindings"][0]["n"]["value"] == str(batch * batches)
