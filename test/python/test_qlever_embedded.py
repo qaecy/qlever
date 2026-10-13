@@ -148,3 +148,16 @@ def test_an_engine_can_be_weakly_referenced(index):
     del engine
     gc.collect()
     assert ref() is None
+
+
+def test_the_module_exports_only_its_entry_point():
+    # Statically linked abseil and re2 must not be visible to a host that loads its own (pyarrow does).
+    out = subprocess.run(["nm", "-D", "--defined-only", qlever_embedded.__file__], check=True, capture_output=True, text=True).stdout
+    exported = {line.split()[-1] for line in out.splitlines() if line.strip()}
+    assert exported == {"PyInit_qlever_embedded"}
+
+
+def test_a_values_clause_of_literals_parses(index):
+    engine = qlever_embedded.Engine(index)
+    result = json.loads(run(engine, f'SELECT ?s WHERE {{ VALUES ?v {{ "a" "b" ".pdf" }} ?s <{EX}p> <{EX}o1> }}'))
+    assert [b["s"]["value"] for b in result["results"]["bindings"]] == [f"{EX}s1"] * 3
