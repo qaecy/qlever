@@ -1,0 +1,5 @@
+/* The only symbol a Python extension module needs to export. */
+{
+  global: PyInit_qlever_embedded;
+  local: *;
+};

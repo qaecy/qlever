@@ -162,7 +162,7 @@ stdin and take no query, while `query`/`update` take a query and read no data.
 - `rebuild(keep_previous="none")` builds a new index from a snapshot into `rebuild.<datetime>.tmp` beside the current one, while queries and writes continue, then swaps it in; writes made meantime are carried over.
 - `counts()`, `write_view(name, sparql)`, `load_view(name)`.
 
-Calls release the GIL; C++ exceptions arrive as `ValueError`/`RuntimeError`. `query(..., timeout_ms=N)` cancels a query after N ms with `QueryTimeout`, a `TimeoutError`, through QLever's cancellation handle; the engine keeps serving. QLever links jemalloc, which cannot be loaded into a running process, so the host must preload it: `LD_PRELOAD=/usr/lib/<arch>-linux-gnu/libjemalloc.so.2`.
+Calls release the GIL; C++ exceptions arrive as `ValueError`/`RuntimeError`. `query(..., timeout_ms=N)` cancels a query after N ms with `QueryTimeout`, a `TimeoutError`, through QLever's cancellation handle; the engine keeps serving. QLever links jemalloc, which cannot be loaded into a running process, so the host must preload it: `LD_PRELOAD=/usr/lib/<arch>-linux-gnu/libjemalloc.so.2`. The module exports only `PyInit_qlever_embedded` (`qlever_embedded.map`): the abseil, re2 and boost it links statically stay local, so a host that loads its own copies (`pyarrow` does) cannot mix them with these.
 
 Both `builder-ubuntu` services build it (`-DQLEVER_PYTHON_BINDINGS=ON`, which needs `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`) as `build-ubuntu*/lib/qlever_embedded.cpython-312-<arch>-linux-gnu.so`; it is vendored at the repo root as `qlever_embedded_ubuntu-<arch>-<version>.so` beside the `qlever-cli` binaries, and installed by the consumer under its import name. Tests and a CLI-versus-embedded benchmark:
 
