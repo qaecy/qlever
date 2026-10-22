@@ -11,7 +11,7 @@
 #include <string>
 #include <string_view>
 
-#include "libqlever/python/EmbeddedEngine.h"
+#include "libqlever/embedded/EmbeddedEngine.h"
 #include "util/CancellationHandle.h"
 
 namespace nb = nanobind;

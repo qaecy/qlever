@@ -52,6 +52,11 @@ if (EMSCRIPTEN)
     )
 endif ()
 
+option(QLEVER_C_BINDINGS "Build libqlever_c, the C ABI over the embedded engine" OFF)
+if (QLEVER_C_BINDINGS)
+    add_subdirectory(c)
+endif ()
+
 option(QLEVER_PYTHON_BINDINGS "Build the qlever_embedded Python module" OFF)
 if (QLEVER_PYTHON_BINDINGS)
     add_subdirectory(python)

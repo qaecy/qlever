@@ -172,6 +172,16 @@ docker compose -f docker-compose.cli-alpine.yml run --rm -w /qlever \
   builder-ubuntu sh -c 'python3 -m pytest -q test/python'
 ```
 
+## Embedded through a C ABI (`libqlever_c`)
+
+`src/libqlever/c/` builds `libqlever_c.so`, the same `EmbeddedEngine` (`src/libqlever/embedded/`) behind a plain C API, `qlever.h`, for hosts that load QLever through a C FFI rather than Python; the monorepo's Rust `qlever-sys` crate is its consumer. Every call returns a `qlever_status` (`QLEVER_OK`, `QLEVER_INVALID` for an invalid argument, `QLEVER_TIMEOUT`, `QLEVER_STOPPED` when the result sink returns non-zero, `QLEVER_FAILED`) and, on failure, a message the caller frees with `qlever_free`; JSON answers come back as strings freed the same way. No C++ exception crosses the boundary. `qlever_abi_version()` is bumped whenever the header changes.
+
+It is built by both `builder-ubuntu` services (`-DQLEVER_C_BINDINGS=ON`, with `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`) as `build-ubuntu*/lib/libqlever_c.so`, and vendored at the repo root as `libqlever_c_ubuntu-<arch>-<version>.so`. It exports only `qlever_*` (`qlever_c.map`), and like the Python module it needs jemalloc preloaded when a running process loads it with `dlopen`: `LD_PRELOAD=/usr/lib/<arch>-linux-gnu/libjemalloc.so.2`. The C test (`test/c/qlever_c_test.c`) links it at start-up and needs no preload:
+
+```bash
+docker compose -f docker-compose.cli-alpine.yml run --rm builder-ubuntu sh ../test/c/run.sh
+```
+
 ## Troubleshooting the test flows
 
 **`rm: can't remove '.../test-db-extended': Directory not empty`** — macOS writes a `.DS_Store` into the bind-mounted test directory in between `rm` unlinking the children and calling `rmdir()`. The `beforeAll` in `e2e-cli/extended-commands.spec.ts` retries the removal to absorb this; if it still bites, close the folder in Finder or run `find e2e-cli -name .DS_Store -delete` first.

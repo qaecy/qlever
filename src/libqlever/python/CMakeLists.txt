@@ -14,7 +14,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nanobind)
 
 nanobind_add_module(qlever_embedded NB_STATIC
-        EmbeddedEngine.cpp
+        ../embedded/EmbeddedEngine.cpp
         QleverEmbeddedModule.cpp)
 qlever_target_link_libraries(qlever_embedded qlever cliUtils engine index
         rdfParser sparqlParser qlever_util)
