@@ -89,9 +89,9 @@ services:
         set -e
         if [ "$$BUILD_JOBS" = "0" ]; then JOBS=$$(nproc); else JOBS=$$BUILD_JOBS; fi
         cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO \
-          -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQLEVER_PYTHON_BINDINGS=ON \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQLEVER_PYTHON_BINDINGS=ON -DQLEVER_C_BINDINGS=ON \
           -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" ..
-        ninja -j$$JOBS qlever-cli qlever-index qlever_embedded CliUtilsTest CliUtilsRdfTest
+        ninja -j$$JOBS qlever-cli qlever-index qlever_embedded qlever_c qlever_c_test CliUtilsTest CliUtilsRdfTest
 
   # Same incremental Ubuntu build, but for linux/amd64 — the architecture a
   # deployment build embeds (`qlever-cli_ubuntu-x86_64-*`, see qaecy-monorepo
@@ -124,9 +124,9 @@ services:
         set -e
         if [ "$$BUILD_JOBS" = "0" ]; then JOBS=$$(nproc); else JOBS=$$BUILD_JOBS; fi
         cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DLOGLEVEL=INFO \
-          -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQLEVER_PYTHON_BINDINGS=ON \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DQLEVER_PYTHON_BINDINGS=ON -DQLEVER_C_BINDINGS=ON \
           -DCMAKE_CXX_FLAGS="-Wno-psabi -Wno-non-template-friend" ..
-        ninja -j$$JOBS qlever-cli qlever-index qlever_embedded CliUtilsTest CliUtilsRdfTest
+        ninja -j$$JOBS qlever-cli qlever-index qlever_embedded qlever_c qlever_c_test CliUtilsTest CliUtilsRdfTest
 
   # Packages the locally-built binaries into a slim Alpine runtime image
   # tagged as qlever-cli:alpine-test (used by the e2e test suite).

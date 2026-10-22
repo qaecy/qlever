@@ -1,0 +1,5 @@
+/* Only the C API is exported (see `qlever.h`). */
+{
+  global: qlever_*;
+  local: *;
+};
