@@ -1,5 +1,5 @@
 # `libqlever_c.so`: the C ABI over `EmbeddedEngine` (see `qlever.h`), for hosts
-# that load QLever through a C FFI (Rust's `qlever-sys`). Built only with
+# that load QLever through a C FFI (the Rust binding in ../rust). Built only with
 # `-DQLEVER_C_BINDINGS=ON`; every library it links must be position-independent,
 # so configure the whole build with `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`.
 add_library(qlever_c SHARED

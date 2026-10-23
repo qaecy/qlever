@@ -174,13 +174,17 @@ docker compose -f docker-compose.cli-alpine.yml run --rm -w /qlever \
 
 ## Embedded through a C ABI (`libqlever_c`)
 
-`src/libqlever/c/` builds `libqlever_c.so`, the same `EmbeddedEngine` (`src/libqlever/embedded/`) behind a plain C API, `qlever.h`, for hosts that load QLever through a C FFI rather than Python; the monorepo's Rust `qlever-sys` crate is its consumer. Every call returns a `qlever_status` (`QLEVER_OK`, `QLEVER_INVALID` for an invalid argument, `QLEVER_TIMEOUT`, `QLEVER_STOPPED` when the result sink returns non-zero, `QLEVER_FAILED`) and, on failure, a message the caller frees with `qlever_free`; JSON answers come back as strings freed the same way. No C++ exception crosses the boundary. `qlever_abi_version()` is bumped whenever the header changes.
+`src/libqlever/c/` builds `libqlever_c.so`, the same `EmbeddedEngine` (`src/libqlever/embedded/`) behind a plain C API, `qlever.h`, for hosts that load QLever through a C FFI rather than Python; its Rust binding, `src/libqlever/rust/`, is its consumer. Every call returns a `qlever_status` (`QLEVER_OK`, `QLEVER_INVALID` for an invalid argument, `QLEVER_TIMEOUT`, `QLEVER_STOPPED` when the result sink returns non-zero, `QLEVER_FAILED`) and, on failure, a message the caller frees with `qlever_free`; JSON answers come back as strings freed the same way. No C++ exception crosses the boundary. `qlever_abi_version()` is bumped whenever the header changes.
 
 It is built by both `builder-ubuntu` services (`-DQLEVER_C_BINDINGS=ON`, with `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`) as `build-ubuntu*/lib/libqlever_c.so`, and vendored at the repo root as `libqlever_c_ubuntu-<arch>-<version>.so`. It exports only `qlever_*` (`qlever_c.map`), and like the Python module it needs jemalloc preloaded when a running process loads it with `dlopen`: `LD_PRELOAD=/usr/lib/<arch>-linux-gnu/libjemalloc.so.2`. The C test (`test/c/qlever_c_test.c`) links it at start-up and needs no preload:
 
 ```bash
 docker compose -f docker-compose.cli-alpine.yml run --rm builder-ubuntu sh ../test/c/run.sh
 ```
+
+## Embedded in Rust (`qlever-embedded`)
+
+`src/libqlever/rust/` is the Rust binding over `libqlever_c`, beside the Python one, so the C ABI and its bindings change together here. A Rust workspace depends on it by git, pinned to a commit (`qlever-embedded = { git = "https://github.com/qaecy/qlever", rev = "<commit>" }`). It loads the library at run time and checks its ABI version, and only its `ffi.rs` has unsafe code. Its tests run against a `builder-ubuntu` build: `src/libqlever/rust/tests/container/run.sh`. See its [README](src/libqlever/rust/README.md).
 
 ## Troubleshooting the test flows
 
