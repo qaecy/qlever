@@ -10,6 +10,7 @@
 #include <sstream>
 
 #include "QleverCliContext.h"
+#include "global/Constants.h"
 #include "util/Log.h"
 #include "util/http/MediaTypes.h"
 #include "util/json.h"
@@ -229,6 +230,42 @@ std::string escapeForFormat(const std::string& value,
   return out;
 }
 
+std::string formatTerm(const nlohmann::json& binding,
+                       const std::string& format) {
+  const auto& type = binding["type"];
+  const auto value = binding["value"].get<std::string>();
+  if (type == "uri") {
+    return "<" + value + ">";
+  }
+  if (type == "bnode") {
+    return "_:" + value;
+  }
+  if (type != "literal") {
+    return value;
+  }
+  std::string result = "\"" + escapeForFormat(value, format) + "\"";
+  if (binding.contains("datatype")) {
+    result += "^^<" + binding["datatype"].get<std::string>() + ">";
+  } else if (binding.contains("xml:lang")) {
+    result += "@" + binding["xml:lang"].get<std::string>();
+  }
+  return result;
+}
+
+std::string namedGraphsQuery() {
+  return "SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } FILTER(?g != " +
+         std::string(DEFAULT_GRAPH_IRI) + ") } ORDER BY ?g ?s ?p ?o";
+}
+
+std::string defaultGraphQuery() {
+  return "SELECT ?s ?p ?o WHERE { GRAPH " + std::string(DEFAULT_GRAPH_IRI) +
+         " { ?s ?p ?o } } ORDER BY ?s ?p ?o";
+}
+
+std::string unionQuery() {
+  return "SELECT DISTINCT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o";
+}
+
 bool isGzipFile(const std::string& filename) {
   return filename.length() > 3 &&
          filename.substr(filename.length() - 3) == ".gz";
@@ -243,27 +280,6 @@ bool isGzipFile(const std::string& filename) {
 DatabaseSerializer::DatabaseSerializer(
     std::shared_ptr<qlever::QleverCliContext> qlever)
     : qlever_(std::move(qlever)) {}
-
-std::string DatabaseSerializer::extractValue(
-    const nlohmann::json& binding) const {
-  const auto& type = binding["type"];
-  const auto& value = binding["value"];
-
-  if (type == "uri") {
-    return "<" + value.get<std::string>() + ">";
-  } else if (type == "literal") {
-    std::string result = "\"" + value.get<std::string>() + "\"";
-    if (binding.contains("datatype")) {
-      result += "^^<" + binding["datatype"].get<std::string>() + ">";
-    } else if (binding.contains("xml:lang")) {
-      result += "@" + binding["xml:lang"].get<std::string>();
-    }
-    return result;
-  } else if (type == "bnode") {
-    return "_:" + value.get<std::string>();
-  }
-  return value.get<std::string>();
-}
 
 void DatabaseSerializer::serialize(const std::string& format,
                                    const std::string& outputFile) {
@@ -354,9 +370,9 @@ void DatabaseSerializer::serialize(const std::string& format,
       batchBuffer.clear();
 
       for (const auto& binding : bindings) {
-        std::string subject = extractValue(binding["s"]);
-        std::string predicate = extractValue(binding["p"]);
-        std::string object = extractValue(binding["o"]);
+        std::string subject = RdfFormatUtils::formatTerm(binding["s"], format);
+        std::string predicate = RdfFormatUtils::formatTerm(binding["p"], format);
+        std::string object = RdfFormatUtils::formatTerm(binding["o"], format);
 
         batchBuffer.append(subject)
             .append(" ")
@@ -366,7 +382,9 @@ void DatabaseSerializer::serialize(const std::string& format,
 
         if (hasGraph) {
           std::string graph =
-              binding.contains("g") ? extractValue(binding["g"]) : "<>";
+              binding.contains("g")
+                  ? RdfFormatUtils::formatTerm(binding["g"], format)
+                  : "<>";
           batchBuffer.append(" ").append(graph);
         }
         batchBuffer.append(" .\n");
@@ -402,16 +420,11 @@ void DatabaseSerializer::serialize(const std::string& format,
     }
   };
 
-  // Serialize default graph triples (valid for both NT and NQ)
-  serializeBatched(
-      "SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o", false);
-
-  // For NQ format, also serialize named graph triples with graph column
   if (format == "nq") {
-    serializeBatched(
-        "SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } "
-        "ORDER BY ?g ?s ?p ?o",
-        true);
+    serializeBatched(RdfFormatUtils::defaultGraphQuery(), false);
+    serializeBatched(RdfFormatUtils::namedGraphsQuery(), true);
+  } else {
+    serializeBatched(RdfFormatUtils::unionQuery(), false);
   }
 
   // Final statistics
