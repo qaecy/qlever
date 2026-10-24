@@ -99,8 +99,6 @@ class DatabaseSerializer {
   static constexpr size_t BATCH_SIZE = 500000;  // 500K triples per batch
   static constexpr auto PROGRESS_INTERVAL = std::chrono::seconds(5);
 
-  std::string extractValue(const nlohmann::json& binding) const;
-
  public:
   explicit DatabaseSerializer(std::shared_ptr<qlever::QleverCliContext> qlever);
 
@@ -120,6 +118,17 @@ std::string formatQuad(const std::string& subject, const std::string& predicate,
                        const std::string& format);
 std::string escapeForFormat(const std::string& value,
                             const std::string& format);
+// One SPARQL JSON result term (`uri`, `literal`, `bnode`) as an N-Triples /
+// N-Quads term, its literal escaped.
+std::string formatTerm(const nlohmann::json& binding, const std::string& format);
+// The export queries: for `nq` every quad of every named graph (the internal
+// default graph's own triples, if any, without a graph term); for `nt` the
+// distinct triples of the union of all graphs. QLever's default graph is that
+// union, so serializing it beside the named graphs would write every triple
+// twice.
+std::string namedGraphsQuery();
+std::string defaultGraphQuery();
+std::string unionQuery();
 bool isGzipFile(const std::string& filename);
 }  // namespace RdfFormatUtils
 

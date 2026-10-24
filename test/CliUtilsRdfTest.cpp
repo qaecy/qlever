@@ -174,6 +174,44 @@ TEST(RdfFormatUtils, EscapeAllSpecialCharsInSequence) {
 // RdfOutputWriter – constructor validation
 // ============================================================
 
+// A literal is written escaped, so what is exported parses back to the same
+// value; the regex below is a project schema's pattern.
+TEST(RdfFormatUtils, FormatTermEscapesLiterals) {
+  auto literal = nlohmann::json::parse(
+      R"({"type": "literal", "value": "^[a-z]+@[a-z.-]+\\.[a-z]{2,}$ \"q\""})");
+  EXPECT_EQ(cli_utils::RdfFormatUtils::formatTerm(literal, "nq"),
+            R"("^[a-z]+@[a-z.-]+\\.[a-z]{2,}$ \"q\"")");
+}
+
+TEST(RdfFormatUtils, FormatTermKeepsDatatypeLanguageIriAndBlankNode) {
+  using cli_utils::RdfFormatUtils::formatTerm;
+  EXPECT_EQ(formatTerm(nlohmann::json::parse(
+                           R"({"type": "literal", "value": "7", "datatype":
+                           "http://www.w3.org/2001/XMLSchema#int"})"),
+                       "nq"),
+            R"("7"^^<http://www.w3.org/2001/XMLSchema#int>)");
+  EXPECT_EQ(formatTerm(nlohmann::json::parse(
+                           R"({"type": "literal", "value": "Tür", "xml:lang": "de"})"),
+                       "nq"),
+            R"("Tür"@de)");
+  EXPECT_EQ(formatTerm(nlohmann::json::parse(R"({"type": "uri", "value": "https://x/a"})"),
+                       "nq"),
+            "<https://x/a>");
+  EXPECT_EQ(formatTerm(nlohmann::json::parse(R"({"type": "bnode", "value": "b0"})"), "nq"),
+            "_:b0");
+}
+
+// N-Quads come from the named graphs alone: QLever's default graph is their
+// union, and serializing it as well would write every triple twice.
+TEST(RdfFormatUtils, ExportQueriesNeverReadTheUnionForQuads) {
+  using namespace cli_utils::RdfFormatUtils;
+  EXPECT_NE(namedGraphsQuery().find("GRAPH ?g"), std::string::npos);
+  EXPECT_NE(namedGraphsQuery().find("default-graph"), std::string::npos);
+  EXPECT_NE(defaultGraphQuery().find("GRAPH <http://qlever.cs.uni-freiburg.de/builtin-functions/default-graph>"),
+            std::string::npos);
+  EXPECT_NE(unionQuery().find("DISTINCT"), std::string::npos);
+}
+
 TEST(RdfOutputWriter, InvalidFormatThrows) {
   EXPECT_THROW(cli_utils::RdfOutputWriter("ttl"), std::invalid_argument);
   EXPECT_THROW(cli_utils::RdfOutputWriter(""), std::invalid_argument);
