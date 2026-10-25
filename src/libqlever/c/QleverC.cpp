@@ -15,6 +15,7 @@
 
 #include "libqlever/embedded/EmbeddedEngine.h"
 #include "util/CancellationHandle.h"
+#include "util/ParseException.h"
 
 struct qlever_engine {
   qlever::embedded::EmbeddedEngine engine;
@@ -54,6 +55,9 @@ qlever_status guarded(char** error, Work&& work) {
   } catch (const ad_utility::CancellationException& e) {
     report(error, e.what());
     return QLEVER_TIMEOUT;
+  } catch (const ParseException& e) {
+    report(error, e.what());
+    return QLEVER_INVALID;
   } catch (const std::invalid_argument& e) {
     report(error, e.what());
     return QLEVER_INVALID;
@@ -86,7 +90,7 @@ std::string text(const char* value, size_t length) {
 
 extern "C" {
 
-uint32_t qlever_abi_version(void) { return 1; }
+uint32_t qlever_abi_version(void) { return 2; }
 
 qlever_status qlever_open(const char* base_name, double memory_gb,
                           int persist_updates, qlever_engine** engine,

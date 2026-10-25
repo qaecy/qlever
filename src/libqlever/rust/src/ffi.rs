@@ -9,7 +9,7 @@ use std::ptr::NonNull;
 
 // The `qlever.h` revision these bindings were written against.
 pub(crate) fn expected_abi() -> u32 {
-    1
+    2
 }
 
 #[repr(C)]
