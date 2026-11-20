@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
         "a CONSTRUCT cannot answer as CSV");
   qlever_free(error);
   error = NULL;
-  CHECK(ask(engine, "SELECT * WHERE { not sparql", "", &out, &error) == QLEVER_FAILED, "a broken query fails");
+  CHECK(ask(engine, "SELECT * WHERE { not sparql", "", &out, &error) == QLEVER_INVALID, "a query that does not parse is invalid");
   qlever_free(error);
   error = NULL;
 

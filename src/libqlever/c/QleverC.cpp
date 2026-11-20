@@ -15,6 +15,7 @@
 
 #include "libqlever/embedded/EmbeddedEngine.h"
 #include "util/CancellationHandle.h"
+#include "util/ParseException.h"
 
 struct qlever_engine {
   qlever::embedded::EmbeddedEngine engine;
@@ -55,6 +56,9 @@ qlever_status guarded(char** error, Work&& work) {
     report(error, e.what());
     return QLEVER_TIMEOUT;
   } catch (const std::invalid_argument& e) {
+    report(error, e.what());
+    return QLEVER_INVALID;
+  } catch (const ParseException& e) {
     report(error, e.what());
     return QLEVER_INVALID;
   } catch (const std::exception& e) {

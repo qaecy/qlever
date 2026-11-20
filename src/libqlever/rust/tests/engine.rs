@@ -65,7 +65,7 @@ fn an_open_index_answers_writes_rebuilds_and_reopens() {
         answer(&engine, "CONSTRUCT { ?s ?p ?o } WHERE { GRAPH ?g { ?s ?p ?o } }", "csv"),
         Err(Error::Invalid(_))
     ));
-    assert!(matches!(answer(&engine, "SELECT * WHERE { not sparql", ""), Err(Error::Failed(_))));
+    assert!(matches!(answer(&engine, "SELECT * WHERE { not sparql", ""), Err(Error::Invalid(_))));
     let stopped = query(&engine, "SELECT ?s WHERE { GRAPH ?g { ?s ?p ?o } }", "tsv", None, &mut |_: &[u8]| false);
     assert_eq!(stopped, Err(Error::Stopped));
     let updated = update(&engine, "INSERT DATA { GRAPH <http://example.org/g> { <http://example.org/x> <http://example.org/p> <http://example.org/y> } }").unwrap();
