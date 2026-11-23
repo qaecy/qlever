@@ -14,6 +14,7 @@
 #include <string_view>
 
 #include "libqlever/embedded/EmbeddedEngine.h"
+#include "parser/MaterializedViewQuery.h"
 #include "util/CancellationHandle.h"
 #include "util/ParseException.h"
 
@@ -59,6 +60,9 @@ qlever_status guarded(char** error, Work&& work) {
     report(error, e.what());
     return QLEVER_INVALID;
   } catch (const ParseException& e) {
+    report(error, e.what());
+    return QLEVER_INVALID;
+  } catch (const MaterializedViewConfigException& e) {
     report(error, e.what());
     return QLEVER_INVALID;
   } catch (const std::exception& e) {
