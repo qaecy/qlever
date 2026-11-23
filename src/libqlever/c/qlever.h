@@ -33,7 +33,7 @@ typedef struct qlever_engine qlever_engine;
 
 typedef enum qlever_status {
   QLEVER_OK = 0,
-  /* An invalid argument: a query or data file that does not parse, an unknown format or keep-previous policy. */
+  /* An invalid argument: a query or data file that does not parse, a view the engine cannot materialize, an unknown format or keep-previous policy. */
   QLEVER_INVALID = 1,
   /* A query ran past its deadline and was cancelled. */
   QLEVER_TIMEOUT = 2,

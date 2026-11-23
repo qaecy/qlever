@@ -81,6 +81,8 @@ fn an_open_index_answers_writes_rebuilds_and_reopens() {
     rebuild(&engine, KeepPrevious::None).unwrap();
     assert_eq!(count(&engine), 12);
     write_view(&engine, "pairs", "SELECT ?s ?o WHERE { GRAPH ?g { ?s <http://example.org/p> ?o } }").unwrap();
+    let limited = "SELECT ?s ?o WHERE { GRAPH ?g { ?s <http://example.org/p> ?o } } LIMIT 1";
+    assert!(matches!(write_view(&engine, "first", limited), Err(Error::Invalid(_))));
     drop(engine);
     assert_eq!(count(&open(&library, &base, 1.0, true).unwrap()), 12);
 }

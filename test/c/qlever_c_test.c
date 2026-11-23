@@ -136,6 +136,11 @@ int main(int argc, char** argv) {
   const char* view = "SELECT ?s ?o WHERE { GRAPH ?g { ?s <http://example.org/p> ?o } }";
   CHECK(qlever_write_view(engine, "pairs", view, strlen(view), &error) == QLEVER_OK, "a view is written");
   CHECK(qlever_load_view(engine, "pairs", &error) == QLEVER_OK, "and loaded");
+  const char* limited = "SELECT ?s ?o WHERE { GRAPH ?g { ?s <http://example.org/p> ?o } } LIMIT 1";
+  CHECK(qlever_write_view(engine, "first", limited, strlen(limited), &error) == QLEVER_INVALID,
+        "a view the engine refuses to materialize is invalid");
+  qlever_free(error);
+  error = NULL;
 
   qlever_close(engine);
   engine = NULL;
